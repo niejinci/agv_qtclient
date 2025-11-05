@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>994</width>
+    <height>600</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>MainWindow</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QGridLayout" name="gridLayout_3">
+    <item row="0" column="0">
+     <widget class="QGroupBox" name="groupBox">
+      <property name="title">
+       <string>连接</string>
+      </property>
+      <layout class="QGridLayout" name="gridLayout">
+       <item row="0" column="0" rowspan="3" colspan="2">
+        <widget class="QGroupBox" name="groupBox_2">
+         <property name="title">
+          <string>服务器</string>
+         </property>
+         <layout class="QGridLayout" name="gridLayout_2">
+          <item row="0" column="0">
+           <widget class="QLabel" name="label">
+            <property name="text">
+             <string>ip</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QLineEdit" name="lineEdit_ip"/>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="label_2">
+            <property name="text">
+             <string>port</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="lineEdit_port"/>
+          </item>
+          <item row="2" column="1">
+           <widget class="QPushButton" name="pushButton_start">
+            <property name="text">
+             <string>启动连接</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="2">
+           <widget class="QPushButton" name="pushButton_close">
+            <property name="text">
+             <string>断开连接</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="3">
+           <widget class="QPushButton" name="pushButton_switch">
+            <property name="text">
+             <string>切换连接</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item row="7" column="4">
+        <widget class="QListWidget" name="listWidget_executionQueue"/>
+       </item>
+       <item row="2" column="2">
+        <widget class="QPushButton" name="pushButton_agv_positon">
+         <property name="text">
+          <string>取消获取agv位置信息</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="0">
+        <widget class="QComboBox" name="comboBox"/>
+       </item>
+       <item row="6" column="0">
+        <widget class="QLabel" name="label_data">
+         <property name="text">
+          <string>数据</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="4">
+        <widget class="QPushButton" name="pushButton_point_cloud">
+         <property name="text">
+          <string>取消获取点云</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="2">
+        <widget class="QPushButton" name="pushButton_stop_hb">
+         <property name="text">
+          <string>停止连接心跳</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="4" rowspan="2" colspan="2">
+        <widget class="QGroupBox" name="groupBox_3">
+         <property name="title">
+          <string>控制模式</string>
+         </property>
+         <widget class="QPushButton" name="pushButton_set_manual">
+          <property name="geometry">
+           <rect>
+            <x>0</x>
+            <y>20</y>
+            <width>80</width>
+            <height>20</height>
+           </rect>
+          </property>
+          <property name="text">
+           <string>抢占控制权</string>
+          </property>
+         </widget>
+         <widget class="QPushButton" name="pushButton_set_auto">
+          <property name="geometry">
+           <rect>
+            <x>90</x>
+            <y>20</y>
+            <width>80</width>
+            <height>20</height>
+           </rect>
+          </property>
+          <property name="text">
+           <string>释放控制权</string>
+          </property>
+         </widget>
+         <widget class="QPushButton" name="pushButton_get_model">
+          <property name="geometry">
+           <rect>
+            <x>90</x>
+            <y>50</y>
+            <width>80</width>
+            <height>20</height>
+           </rect>
+          </property>
+          <property name="text">
+           <string>获取当前模式</string>
+          </property>
+         </widget>
+         <widget class="QPushButton" name="pushButton_teaching">
+          <property name="geometry">
+           <rect>
+            <x>0</x>
+            <y>50</y>
+            <width>80</width>
+            <height>20</height>
+           </rect>
+          </property>
+          <property name="text">
+           <string>示教模式</string>
+          </property>
+         </widget>
+        </widget>
+       </item>
+       <item row="6" column="5">
+        <widget class="QPushButton" name="pushButton_uploadfile">
+         <property name="text">
+          <string>上传一个文件</string>
+         </property>
+        </widget>
+       </item>
+       <item row="6" column="1">
+        <widget class="QLabel" name="label_response">
+         <property name="text">
+          <string>响应</string>
+         </property>
+        </widget>
+       </item>
+       <item row="6" column="4">
+        <widget class="QLabel" name="label_3">
+         <property name="text">
+          <string>执行队列</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="2">
+        <widget class="QPushButton" name="pushButton">
+         <property name="text">
+          <string>获取服务端进程信息</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="1" colspan="2">
+        <widget class="QPlainTextEdit" name="plainTextEdit_response"/>
+       </item>
+       <item row="1" column="2">
+        <widget class="QPushButton" name="pushButton_restart_hb">
+         <property name="text">
+          <string>重启连接心跳</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="label_requestname">
+         <property name="text">
+          <string>请求名称</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="0">
+        <widget class="QPlainTextEdit" name="plainTextEdit_send1"/>
+       </item>
+       <item row="8" column="0">
+        <widget class="QPushButton" name="pushButton_send1">
+         <property name="text">
+          <string>发送1</string>
+         </property>
+        </widget>
+       </item>
+       <item row="7" column="5">
+        <widget class="QPlainTextEdit" name="plainTextEdit_uploadfile"/>
+       </item>
+       <item row="4" column="4">
+        <widget class="QPushButton" name="pushButton_get_task_queue">
+         <property name="text">
+          <string>获取任务执行队列</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>994</width>
+     <height>21</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
