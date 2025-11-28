@@ -73,7 +73,7 @@ qclcpp 提供 c++ API 给qt客户端使用
         "message": "file_path is empty"
     }
     ```
-    请求参数字段说明:
+    响应参数字段说明:
 
     | 字段名称      | 类型         | 含义                                               |
     |---------------|-------------|----------------------------------------------------|
@@ -222,7 +222,10 @@ bool upload_file(const std::string& args, ResponseHandler handler);
 
 **描述**
 上传文件到服务端。
-默认保存在目录: /home/docker_share/, 模型文件保存在目录: /home/byd/config/model/，上传模型文件后，会重启docker 。
+- 默认保存在目录: /home/docker_share/
+- 模型文件保存在目录: /home/byd/config/model/，上传模型文件后，会重启docker
+- 示教文件保存在目录: /home/byd/config/dualarm/teachin/
+
 识别文件保存在目录: /home/byd/config/video/
 
 **参数**
@@ -239,7 +242,7 @@ bool upload_file(const std::string& args, ResponseHandler handler);
     | 字段名称      | 类型   | 含义                                                |
     |---------------|--------|-----------------------------------------------------|
     | filepath       | string | 要上传的文件路径                                    |
-    | type           | string | 文件类型【可选字段】，目前有： model-模型文件，video-识别文件，如果没有该字段，上传的文件默认放到 /home/docker_share/ 目录下     |
+    | type           | string | 文件类型【可选字段】，目前有： model-模型文件，video-识别文件，teachin-示教文件，如果没有该字段，上传的文件默认放到 /home/docker_share/ 目录下     |
 * **handler**(ResponseHandler)
     当文件上传完成或发生错误时调用的回调函数。
     ```cpp
@@ -296,6 +299,12 @@ bool push_map(const std::string& file_path, ResponseHandler handler);
 
 **描述**
 推送地图文件给小车。推送的地图位于 "/home/byd/data/map/gui/" 目录下。
+
+**模式限制**
+
+- 支持模式：手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **file_path**(const std::string&)
@@ -424,13 +433,16 @@ bool get_agv_position(ResponseHandler handler);
         "code": 0,
         "data": {
             "deviation_range": 0,
-            "localization_score": 11.73,
+            "localization_score": 78.93,
             "map_description": "",
-            "map_id": "2d-1",
+            "map_id": "out_door_map",
+            "pitch": 0,                         // 俯仰角度
             "position_initialized": true,
-            "theta": -0.5989412450106449,
-            "x": 3.9941876561129983,
-            "y": 0.525087608040933
+            "roll": 0,                          // 横滚角度
+            "theta": -0.0002673083589016188,    // 偏航角度
+            "x": -0.18903135370238958,
+            "y": -0.10455313108630876,
+            "z": 0
         },
         "message": "success"
     }
@@ -496,7 +508,7 @@ bool get_point_cloud(ResponseHandler handler);
                     {
                         "x": 1.1,       //  空间坐标
                         "y": 2.2,       //  空间坐标
-                        //"z": 0.0,       //  空间坐标，去掉，未用到
+                        "z": 0.0,       //  空间坐标，2d slam 时为0
                         "i": 2.2        // 反射强度 (Reflectivity Intensity), 通常由激光雷达（LiDAR）提供。LiDAR 发射激光脉冲，当脉冲击中物体表面后会反射回传感器。intensity 值表示返回信号的强度
                     },
                     //...
@@ -548,7 +560,7 @@ bool set_operating_mode(int mode, ResponseHandler handler);
 ```
 
 **描述**
-设置小车操作模式。**服务器端发布主题后，就会响应成功。实际设置的结果要通过 get_operating_mode() api 获取。**
+【即时动作】设置小车操作模式。**服务器端发布主题后，就会响应成功。实际设置的结果要通过 get_operating_mode() api 获取。**
 
 **参数**
 * **mode**(int)
@@ -1095,7 +1107,7 @@ bool build_map(ResponseHandler handler);
 ```
 
 **描述**
-构建地图(2d)。
+【即时动作】构建地图(2d)。
 
 **参数**
 * **handler**(ResponseHandler)
@@ -1431,6 +1443,12 @@ bool start_task(const std::string& args, ResponseHandler handler)
 **描述**
 启动任务
 
+**模式限制**
+
+- 支持模式：手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
+
 **参数**
 * **args**(std::string)
     json 格式的字符串，例如：
@@ -1500,6 +1518,15 @@ bool start_task(const std::string& args, ResponseHandler handler)
 
         },
         {
+            "action": "if",
+            "cmd": "3009",
+            "condition": {
+                "type": "di",
+                "index": 2,
+                "value": 1
+            }
+        },
+        {
             "action": "start_charging",
             "cmd": "100e",
             "charging_time": 240,
@@ -1513,6 +1540,10 @@ bool start_task(const std::string& args, ResponseHandler handler)
             "value": 1
         },
         {
+            "action": "endif",
+            "cmd": "300a"
+        },
+        {
             "action": "wait_di",
             "cmd": "f014",
             "index": 2,
@@ -1522,6 +1553,89 @@ bool start_task(const std::string& args, ResponseHandler handler)
             "action": "station_code_rectify",
             "cmd": "f015",
             "type": 1
+        },
+        {
+            "category": "binding",
+            "action": "dualArmMoveJMotion",
+            "blocking_type": "NONE",
+            "cmd": "7005",
+            "max_vel": 0.2,
+            "max_acc": 1,
+            "max_dec": 0.5,
+            "cycle_time": 0.001,
+            "head_pan": 0.0,
+            "head_tilt": 0.1,
+            "right_1": 0.2,
+            "right_2": 0.3,
+            "right_3": 0.4,
+            "right_4": 0.5,
+            "right_5": 0.6,
+            "right_6": 0.7,
+            "right_7": 0.8,
+            "ankle_joint": 0.9,
+            "knee_joint": 1.0,
+            "waist_joint": 1.1,
+            "left_1": 1.2,
+            "left_2": 1.3,
+            "left_3": 1.4,
+            "left_4": 1.5,
+            "left_5": 1.6,
+            "left_6": 1.7,
+            "left_7": 1.8
+        },
+        {
+            "category": "binding",
+            "action": "dualArmMoveLMotion",
+            "blocking_type": "NONE",
+            "cmd": "7006",
+            "arm_type": 1,
+            "max_vel": 1.0,
+            "max_acc": 2.0,
+            "max_dec": 2.0,
+            "cycle_time": 3.0,
+            "right_arm_x": 0.1,
+            "right_arm_y": 0.2,
+            "right_arm_z": 0.3,
+            "right_arm_rx": 0.4,
+            "right_arm_ry": 0.5,
+            "right_arm_rz": 0.6,
+            "left_arm_x": 1.0,
+            "left_arm_y": 1.1,
+            "left_arm_z": 1.2,
+            "left_arm_rx": 1.3,
+            "left_arm_ry": 1.4,
+            "left_arm_rz": 1.5
+        },
+        {
+            "category": "binding",
+            "action": "triggerCamera",
+            "blocking_type": "NONE",
+            "cmd": "700e",
+            "camera_id": "head_cam"
+        },
+        {
+            "category": "binding",
+            "action": "dualArmMoveLMotion",
+            "blocking_type": "NONE",
+            "cmd": "700f",
+            "arm_type": 1,
+            "max_vel": 1.0,
+            "max_acc": 2.0,
+            "max_dec": 2.0,
+            "cycle_time": 3.0,
+            "pose_id": "cam_cal_pick"
+        },
+        {
+            "category": "binding",
+            "action": "dualArmGoHome",
+            "cmd": "7007",
+            "max_vel": 1.0
+        },
+        {
+            "category": "binding",
+            "action": "waitDuration",
+            "cmd": "3008",
+            "delay_ms": 1000
         }
     ]
     }
@@ -1530,9 +1644,9 @@ bool start_task(const std::string& args, ResponseHandler handler)
 
     | 字段名称     | 类型       | 含义                                                                                                        |
     |--------------|------------|-------------------------------------------------------------------------------------------------------------|
-    | max_speed    | double     | 【**可选**】最大速度，单位m                                                                                             |
+    | max_speed    | double     | 【**可选**】最大速度，单位m                                                                                    |
     | map_id       | string     | 地图编号                                                                                                      |
-    | loop         | bool       | true: 表示循环任务， false: 表示非循环任务                                                                 |
+    | loop         | bool       | true: 表示循环任务， false: 表示非循环任务                                                                    |
     | tasks        | json 数组  |                                                                                                             |
     | tasks[0]     | json 对象  | 一个任务                                                                                                      |
     | cmd          | string     | 命令字段, 路径导航：100a，顶升: 1005, 100e: 充电, f013: 设置输出，f014: 等待输入                                   |
@@ -1540,7 +1654,7 @@ bool start_task(const std::string& args, ResponseHandler handler)
     | list[0]      | json 对象  | 一条边                                                                                                        |
     | start_point  | json 对象  | 一个节点对象                                                                                                  |
     | n            | string     | 节点名称                                                                                                      |
-    | a            | double     | 弧度 (-pi, pi]                                                                                                         |
+    | a            | double     | 弧度 (-pi, pi]                                                                                                |
     | x            | double     | x坐标，单位米                                                                                                 |
     | y            | double     | y坐标，单位米                                                                                                 |
     | end_point    | json 对象  | 同 start_point                                                                                                |
@@ -1549,14 +1663,14 @@ bool start_task(const std::string& args, ResponseHandler handler)
     | orient_type  | string   | - orientationType 定义了路径段的定位形式，分别为地图全局坐标系(GLOBAL)和路径段的切线(TANGENTIAL) <br> - orientationType = TANGENTIAL, 此时orientation 只有两个取值，为0时表示与前进，Pi时则表示为后退 <br> - orientationType = GLOBAL, 此时，Orientation 表示车在地图下的角度，对于差速车而言，设备只可以以路径方向前进/后退，因此 Orientation 只能为路径段角度或路径段角度减Pi(文档中说的是加pi, 跟奉工对齐是减 pi)，取值范围 [-pi, pi], 路径段角度计算方式为 atan2(y2 - y1, x2 - x1)|
     |line_speed    | double   |小车在该边上的行驶速度，如果大于 max_speed 就取 max_speed 的值                                                      |
 
-    顶升动作节点字段说明
+    **顶升动作节点字段说明**
     | 字段名称     | 类型       | 含义                            |
     |--------------|------------|-------------------------------|
     | cmd    | string     | 取值为 "1005"                        |
     | action       | string     | 取值为 "pick" or "drop"       |
     | height       | double     | 顶升高度，单位 m                |
 
-    充电动作节点字段说明 **(一个节点有了充电动作就不能有其他动作)**
+    **充电动作节点字段说明** *(一个节点有了充电动作就不能有其他动作)*
     | 字段名称     | 类型       | 含义                            |
     |--------------|------------|-------------------------------|
     | cmd    | string     | 取值为 "100e"                        |
@@ -1565,7 +1679,7 @@ bool start_task(const std::string& args, ResponseHandler handler)
     | ip            | string     | 【**可选**】充电桩IP，非无线桩可以忽略                    |
     | port          | int  | 【**可选**】充电桩端口，非无线桩可以忽略，不下发采用默认端口         |
 
-    设置gpio dido动作节点字段说明
+    **设置gpio dido动作节点字段说明**
     | 字段名称     | 类型       | 含义                            |
     |--------------|------------|-------------------------------|
     | cmd    | string     | 取值为 "f013" or "f014"                       |
@@ -1573,14 +1687,14 @@ bool start_task(const std::string& args, ResponseHandler handler)
     | index         | int     | io口的下标，取值范围 [0, 23]                  |
     | value         | int     | 0 or 1                                 |
 
-    站点二维码纠正动作节点字段说明
+    **站点二维码纠正动作节点字段说明**
     | 字段名称     | 类型       | 含义                            |
     |--------------|------------|-------------------------------|
     | cmd    | string     | 取值为 "f015"                        |
     | action       | string     | **【可选字段】** 取值为 "station_code_rectify"       |
     | type       | int     |1 - DependencyWareType - 依赖载具类型 <br> 2 - QrCodeChangeDirectionRectify - 站台内原地旋转纠偏 <br>3 - QrCodeExitStationRectify - 出站纠偏  |
 
-    设置贝塞尔曲线节点字段说明
+    **设置贝塞尔曲线节点字段说明**
     | 字段名称          | 类型       | 含义                                     |
     |-------------------|------------|----------------------------------------|
     | control_points    | json 数组  | **【可选字段】** 包含控制节点的数组       |
@@ -1589,7 +1703,7 @@ bool start_task(const std::string& args, ResponseHandler handler)
     | y                 | double     | 世界坐标系中描述的Y 坐标                 |
     | weight            | double     | 权重，未定义默认为1.0                    |
 
-    避障字段说明
+    **避障字段说明**
     | 字段名称          | 类型       | 含义                                     |
     |-------------------|------------|----------------------------------------|
     | avoid    | json 对象  | **【可选字段】** 避障对象，小车避障距离 = 货架尺寸 + avoid 对象中对应方向的距离<br>**节点中的 avoid 控制 旋转避障，边中的 avoid 控制直行避障** |
@@ -1598,6 +1712,171 @@ bool start_task(const std::string& args, ResponseHandler handler)
     | left      | double     | 左侧距离，单位m, 默认 0.2               |
     | right     | double     | 右侧距离，单位m, 默认 0.2                   |
 
+    **category 字段说明：**
+    1. 动作(action) 分为两类：**即时动作** 和 **任务动作**
+    2. 即时动作：可以独立执行的动作
+    3. 任务动作：action 作为任务的参数，在任务中执行的动作
+    4. 即时动作的 category=instant(此时，可以省略 caterory 字段), 任务动作的 category=binding, 此时必须传递 category 字段
+    5. category=binding 的 action 会绑定到节点，绑定规则如下：
+        - 默认绑定前面边的终点
+        - 如果前面没有节点的话就绑定后面边的起点。
+
+    **机器人关节运动字段说明**
+    关节运动：dualArmMoveJMotion 接口字段说明
+    | 字段名称 | 类型 | 含义，默认是必选字段，可选字段会标记 **【可选字段】** |
+    |----------|------|------|
+    | category | string | 类别，固定为 "binding"|
+    | action | string | 动作，固定为 "dualArmMoveJMotion", |
+    | blocking_type | string | **【可选字段】**仅限于绑定类型动作，动作限制类型，HARD 表示动作限制在 NODE(节点) 上执行，NONE 表示动作现在 EDGE(边) 上执行，不传时后台程序默认取值 HARD|
+    | cmd | string | 命令码，固定为 "7005" |
+    | max_vel | double |  **【可选字段】** 最大速度(double,可选)    范围: 0-80|
+    | max_acc | double | **【可选字段】** 加速度(double,可选)       范围: 0 - 200|
+    | max_dec | double | **【可选字段】** 减速度(double,可选)       范围: 0 - 400|
+    | max_jerk | double |**【可选字段】** 加加速度(double,可选)      范围: (0-100米每秒三次方)|
+    | cycle_time | double | **【可选字段】** 控制周期(double,可选)  范围: 0.001|
+    | head_pan | double |  控制关节0(double,关节控制必加) 范围: -45 到 45|
+    | head_tilt | double | 控制关节1(double,关节控制必加) 范围: -30 到 30  |
+    | right_1 | double | 控制关节2(double,关节控制必加) 范围: -180 到 180  |
+    | right_2 | double | 控制关节3(double,关节控制必加) 范围: -10 到 187  |
+    | right_3 | double | 控制关节4(double,关节控制必加) 范围: -180 到 180   |
+    | right_4 | double | 控制关节5(double,关节控制必加) 范围: -180 到 180  |
+    | right_5 | double | 控制关节6(double,关节控制必加) 范围:-180 到 180  |
+    | right_6 | double | 控制关节7(double,关节控制必加) 范围:-100 到 110  |
+    | right_7 | double | 控制关节8(double,关节控制必加) 范围:-180 到 180  |
+    | ankle_joint | double | 控制关节9(double,关节控制必加) 范围:-360 到 360  |
+    | knee_joint | double | 控制关节10(double,关节控制必加) 范围:-360 到 360  |
+    | waist_joint | double | 控制关节11(double,关节控制必加) 范围:-360 到 360  |
+    | left_1 | double | 控制关节12(double,关节控制必加) 范围:-260 到 180  |
+    | left_2 | double | 控制关节13(double,关节控制必加) 范围:-10 到 187  |
+    | left_3 | double | 控制关节14(double,关节控制必加) 范围:-180 到 180  |
+    | left_4 | double | 控制关节15(double,关节控制必加) 范围:-110 到 180  |
+    | left_5 | double | 控制关节16(double,关节控制必加) 范围:-260 到 180  |
+    | left_6 | double | 控制关节17(double,关节控制必加) 范围:-280 到 100  |
+    | left_7 | double | 控制关节18(double,关节控制必加) 范围:-180 到 360  |
+
+    **直线运动：dualArmMoveLMotion 接口字段说明**
+
+    | 字段名称 | 类型 | 含义 |
+    |----------|------|------|
+    | category | string | 类别，固定为 "binding" |
+    | action | string | 动作，固定为 "dualArmMoveLMotion" |
+    | blocking_type | string | **【可选字段】**仅限于绑定类型动作，动作限制类型，HARD 表示动作限制在 NODE(节点) 上执行，NONE 表示动作现在 EDGE（边） 上执行，不传时后台程序默认取值 HARD|
+    | cmd | string | 命令码，固定为 "7006" |
+    | arm_type | int | 运动类型，哪个臂运动 0：左臂运动 1： 右臂运动 2：双臂运动 |
+    | max_vel | double |**【可选字段】** 最大速度(double,可选)    范围: 0-1|
+    | max_acc | double |**【可选字段】** 加速度(double,可选)      范围: 0-4|
+    | max_dec | double |**【可选字段】** 减速度(double,可选)      范围: 0-4|
+    | max_jerk | double |**【可选字段】** 加加速度(double,可选)      范围: (0-100米每秒三次方)|
+    | cycle_time | double | **【可选字段】** 控制周期(double,可选)   范围: 0.001|
+    | right_arm_x | double | 控制右臂x(double,直线运动控制必加) arm_type=1 or arm_type=2 时传 |
+    | right_arm_y | double | 右臂y坐标, 范围: 无 |
+    | right_arm_z | double | 右臂z坐标, 范围: 无 |
+    | right_arm_rx | double | 右臂rx角度, 范围: 无(角度制度) |
+    | right_arm_ry | double | 右臂ry角度, 范围: 无(角度制度)  |
+    | right_arm_rz | double | 右臂rz角度, 范围: 无(角度制度)  |
+    | left_arm_x | double | 控制左臂x(double,直线运动控制必加) arm_type=0 or arm_type=2 时传  |
+    | left_arm_y | double | 左臂y坐标, 范围: 无 |
+    | left_arm_z | double | 左臂z坐标, 范围: 无 |
+    | left_arm_rx | double | 左臂rx角度, 范围: 无(角度制度)  |
+    | left_arm_ry | double | 左臂ry角度, 范围: 无(角度制度)  |
+    | left_arm_rz | double | 左臂rz角度, 范围: 无(角度制度)  |
+
+    **MOVEL自定义点位(跟相机拍照action配合使用,相机拍照action在前,该action在后):**
+    | 字段名称 | 类型 | 含义 |
+    |----------|------|------|
+    | category | string | 类别，固定为 "binding" |
+    | action | string | 动作，固定为 "dualArmMoveLMotion" |
+    | blocking_type | string | **【可选字段】**仅限于绑定类型动作，动作限制类型，HARD 表示动作限制在 NODE(节点) 上执行，NONE 表示动作现在 EDGE(边) 上执行，不传时后台程序默认取值 HARD|
+    | cmd | string | 命令码，固定为 "700f" |
+    | arm_type | int | 运动类型，哪个臂运动 0：左臂运动 1： 右臂运动 2：双臂运动 |
+    | max_vel | double |**【可选字段】** 最大速度(double,可选)    范围: 0-1|
+    | max_acc | double |**【可选字段】** 加速度(double,可选)      范围: 0-4|
+    | max_dec | double |**【可选字段】** 减速度(double,可选)      范围: 0-4|
+    | max_jerk | double |**【可选字段】** 加加速度(double,可选)      范围: (0-100米每秒三次方)|
+    | cycle_time | double | **【可选字段】** 控制周期(double,可选)   范围: 0.001|
+    | pose_id | string | 移动点位id, 范围:cam_cal_pick, cam_cal_pick_up |
+
+    **相机拍照**
+    | 字段名称 | 类型 | 含义 |
+    |----------|------|------|
+    | category | string | 类别，固定为 "binding" |
+    | action | string | 动作，固定为 "triggerCamera" |
+    | blocking_type | string | **【可选字段】**仅限于绑定类型动作，动作限制类型，HARD 表示动作限制在 NODE(节点) 上执行，NONE 表示动作现在 EDGE(边) 上执行，不传时后台程序默认取值 HARD|
+    | cmd | string | 命令码，固定为 "700e" |
+    | camera_id | string |相机id(string) ,取值范围:head_cam, body_cam  |
+
+    **双臂机器人一键回原点: dualArmGoHome 接口字段说明**
+    | 字段名称 | 类型 | 含义，默认是必选字段，可选字段会标记 **【可选字段】** |
+    |----------|------|------|
+    | category | string | 类别，固定为 "binding"|
+    | action | string | 动作，固定为 "dualArmGoHome", |
+    | cmd | string | 命令码，固定为 "7007" |
+    | max_vel | double |  **【可选字段】** 最大速度(double,可选)    范围:0-1 |
+
+    **任务延迟: waitDuration 接口字段说明**
+    | 字段名称 | 类型 | 含义，默认是必选字段，可选字段会标记 **【可选字段】** |
+    |----------|------|------|
+    | category | string | 类别，固定为 "binding"|
+    | action | string | 动作，固定为 "waitDuration", |
+    | cmd | string | 命令码，固定为 "3008" |
+    | delay_ms | double | 延迟时间，单位毫秒 |
+
+    **条件控制动作字段说明**
+    - 条件动作用于控制任务链(即时动作，任务)在条件满足时才执行，条件不满足时，该动作或任务会被忽略。
+    - 条件动作块由 'if' 和 'endif' 定义， 'if' 定义条件块的开始， 'endif' 定义条件开的结束。
+    - 所有位于 'if'， 'endif' 之间的动作和任务只有在 'if' 指定的条件满足时才会执行，反之，它们会被忽略。
+
+    | 字段名称 | 类型 | 含义，默认是必选字段，可选字段会标记 **【可选字段】** |
+    |----------|------|------|
+    | action | string | 条件开始标记，固定为 "if", |
+    | cmd | string | 命令码，固定为 "3009" |
+    | condition | json对象 | 条件对象 |
+    | condition.type | string | 条件类型，示例中定义了 di, 根据实际情况扩展，例如，`"variable"`, `"time"`|
+    | condition.index | int | di索引 |
+    | condition.value | int | di值 |
+
+    | 字段名称 | 类型 | 含义，默认是必选字段，可选字段会标记 **【可选字段】** |
+    |----------|------|------|
+    | action | string | 条件结束标记，固定为 "endif", |
+    | cmd | string | 命令码，固定为 "300a" |
+
+    **示例**
+    **场景 1: 条件 即时动作**
+    执行 `set_do` 当 `DI[2]` 等于 `1`.
+
+    ```json
+    {
+        "tasks": [
+            { "cmd": "100a", "list": [ /* ... nav from node0 to node1 ... */ ] },
+            {
+                "action": "if",
+                "cmd": "3009",
+                "condition": { "type": "di", "index": 2, "value": 1 }
+            },
+            { "action": "set_do", "cmd": "f013", "index": 0, "value": 1 },
+            { "action": "endif", "cmd": "300a" },
+            { "cmd": "100a", "list": [ /* ... nav from node1 to node2 ... */ ] }
+        ]
+    }
+    ```
+
+    **场景 2: 条件 任务**
+    执行任务，从`node0` 到 `node1` 当 `DI[3]` 等于 `1`.
+
+    ```json
+    {
+        "tasks": [
+            {
+                "action": "if",
+                "cmd": "3009",
+                "condition": { "type": "di", "index": 3, "value": 1 }
+            },
+            { "cmd": "100a", "list": [ /* ... nav from node0 to node1 ... */ ] },
+            { "action": "endif", "cmd": "300a" },
+            { "cmd": "100a", "list": [ /* ... nav from node1 to node2 ... */ ] }
+        ]
+    }
+    ```
 
 * **handler**(ResponseHandler)
     启动任务完成或出错时调用的回调函数。其签名为：
@@ -1636,7 +1915,13 @@ bool translation(const std::string& args, ResponseHandler handler)
 ```
 
 **描述**
-平动
+【即时动作】平动
+
+**模式限制**
+
+- 支持模式：手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -1696,7 +1981,13 @@ bool lifting(const std::string& args, ResponseHandler handler)
 ```
 
 **描述**
-顶升
+【即时动作】顶升
+
+**模式限制**
+
+- 支持模式：示教模式、手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -1745,7 +2036,13 @@ bool remote_control(const std::string& args, ResponseHandler handler)
 ```
 
 **描述**
-遥控
+【即时动作】遥控
+
+**模式限制**
+
+- 支持模式：示教模式
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -1755,7 +2052,8 @@ bool remote_control(const std::string& args, ResponseHandler handler)
         "action": "up",
         "linear_velocity": 0.5,
         "angular_velocity": 30,
-        "distance": 10
+        "distance": 10,
+        "lateral_velocity": 0.8
     }
     ```
     请求参数字段说明: (按照仙工对应功能定义的，跟实际的后端接口需要的参数并不一样)
@@ -1764,6 +2062,7 @@ bool remote_control(const std::string& args, ResponseHandler handler)
     | action            | string    | 实际未用到                                                   |
     | linear_velocity   | double    | 移动线速度，对应 linear_x                                  |
     | angular_velocity  | double    | 移动角速度，对应 angular_z                                 |
+    | lateral_velocity  | double    | 【可选字段】横向移动速度，单位米，对应 linear_y              |
 
 * **handler**(ResponseHandler)
     遥控完成或出错时调用的回调函数。其签名为：
@@ -1803,7 +2102,13 @@ bool rotation(const std::string& args, ResponseHandler handler)
 ```
 
 **描述**
-小车旋转
+【即时动作】小车旋转
+
+**模式限制**
+
+- 支持模式：手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -1862,7 +2167,13 @@ bool cancel_task(const std::string& args, ResponseHandler handler)
 ```
 
 **描述**
-取消任务
+【即时动作】取消任务
+
+**模式限制**
+
+- 支持模式：示教模式、手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -1911,7 +2222,13 @@ bool resume_task(ResponseHandler handler)
 ```
 
 **描述**
-恢复任务
+【即时动作】恢复任务
+
+**模式限制**
+
+- 支持模式：手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **handler**(ResponseHandler)
@@ -1953,7 +2270,13 @@ bool pause_task(ResponseHandler handler)
 ```
 
 **描述**
-暂停任务
+【即时动作】暂停任务
+
+**模式限制**
+
+- 支持模式：手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **handler**(ResponseHandler)
@@ -2008,25 +2331,13 @@ bool get_run_task(ResponseHandler handler)
     {
         "code": 0,
         "data": {
-            "action_states": [
-                {
-                    "action_id": "4:B4wcAZ5hT-6khPB:238126",
-                    "action_status": "WAITING",
-                    "action_type": "pick"
-                },
-                {
-                    "action_id": "4:B4wcAZ5hT-6khPB:238126",
-                    "action_status": "WAITING",
-                    "action_type": "drop"
-                }
-            ],
-            "drop": [
-                "LM2"
-            ],
-            "order_id": "3f685511-3dc1-453f-b624-77090e61c796",
-            "pick": [
-                "LM1"
-            ]
+            "last_node_id": "",
+            "next_node_id": "",
+            "order_id": "",
+            "position": {
+                "x": 0,
+                "y": 0
+            }
         },
         "message": "success"
     }
@@ -2038,8 +2349,11 @@ bool get_run_task(ResponseHandler handler)
     | message        | string   | 失败信息，例如参数为空                              |
     | data           | json 对象 | 包含当前任务的信息                                 |
     | order_id       | string    | 当前执行的任务的id, 如果没有任务在执行，其值为空     |
-    | drop           | json 数组 | 放货所在节点的名称                                 |
-    | pick           | json 数组 | 取货所在节点的名称                                 |
+    | last_node_id   | string | 上一个节点的名称                                    |
+    | next_node_id   | string | 下一个节点的名称                                    |
+    | position       | json 对象 | 小车的位置信息                                    |
+    | position.x     | double | x 坐标                                              |
+    | position.y     | double | y 坐标                                              |
 
 **返回值**
 * true:
@@ -2063,7 +2377,13 @@ bool relocation(const std::string& args, ResponseHandler handler)
 ```
 
 **描述**
-重定位
+【即时动作】重定位
+
+**模式限制**
+
+- 支持模式：手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -2184,7 +2504,7 @@ bool Client::emergency_stop(const std::string& args, ResponseHandler handler)
 ```
 
 **描述**
-急停(软急停：不支持抱死急停，给一个0速度)
+【即时动作】急停(软急停：不支持抱死急停，给一个0速度)
 
 **参数**
 * **args**
@@ -2434,7 +2754,13 @@ bool pallet_rotation(const std::string& args, ResponseHandler handler);
 ```
 
 **描述**
-托盘旋转
+【即时动作】托盘旋转
+
+**模式限制**
+
+- 支持模式：示教模式、手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -2814,7 +3140,13 @@ bool set_do(const std::string& args, ResponseHandler handler);
 ```
 
 **描述**
-设置io模块输出
+【即时动作】设置io模块输出
+
+**模式限制**
+
+- 支持模式：示教模式、手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
 
 **参数**
 * **args**(std::string)
@@ -2840,9 +3172,7 @@ bool set_do(const std::string& args, ResponseHandler handler);
     ```json
     {
         "code": 0,
-        "data": {
-            "filename": "./video/xxx.zip"                   // 拉取的视频存放在程序当前 video 目录下(跟地图的 map 目录平级)
-        },
+        "data": {},
         "message": "success"
     }
     ```
@@ -2857,6 +3187,66 @@ bool set_do(const std::string& args, ResponseHandler handler);
 **示例代码**
 ```cpp
 bool ret = client_->set_do(args, handler);
+if (!ret) {
+    //出错处理
+}
+```
+
+## set_di
+
+**函数签名**
+```cpp
+bool set_di(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+设置io模块输入，该 di 值用于任务链的 if 条件控制，可以通过该接口动态修改 di 值以影响任务链的执行流程。
+
+**模式限制**
+
+- 支持模式：示教模式、手动模式(抢占了模式)
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
+
+**参数**
+* **args**(std::string)
+    json 格式的字符串，例如:
+    ```json
+    {
+        "index": 2,
+        "value": 1
+    }
+    ```
+    请求参数字段说明:
+    | 字段名称      | 类型         | 含义                                                                                                 |
+    |---------------|--------------|------------------------------------------------------------------------------------------------------|
+    | index          | int       | io 字段编号，取值范围 [0, 23]                                                                          |
+    | value          | int       | 值，0 or 1                                                                                            |
+
+* **handler**(ResponseHandler)
+    设置io模块输出完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": {},
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 表示发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 表示发起异步操作失败，例如， file_name 为空，未提供 handler, 未连接服务器，当前正在获取文件
+
+
+**示例代码**
+```cpp
+bool ret = client_->set_di(args, handler);
 if (!ret) {
     //出错处理
 }
@@ -2925,7 +3315,7 @@ bool clear_errors(ResponseHandler handler);
 ```
 
 **描述**
-清除错误信息。(直到底层再次发送 errors, 否则 get_errors() 返回的错误为空)
+【即时动作】清除错误信息。(直到底层再次发送 errors, 否则 get_errors() 返回的错误为空)
 
 **参数**
 * **handler**(ResponseHandler)
@@ -3107,20 +3497,18 @@ bool get_plc_digital_io(ResponseHandler handler);
         "data": {
             "dis": [
                 {
-                    "id": 5,
-                    "value": 0
-                },
-                {
-                    "id": 6,
+                    "id": 13,
                     "value": 1
                 }
             ],
             "dos": [
                 {
-                    "id": 2,
+                    "id": 3,
                     "value": 1
                 }
-            ]
+            ],
+            "plc_dis": [],
+            "plc_dos": []
         },
         "message": "success"
     }
@@ -3133,6 +3521,8 @@ bool get_plc_digital_io(ResponseHandler handler);
     | data           | json 对象 | 响应数据                                          |
     | dis           | json 数组      | digital input                                |
     | dos           | json 数组     | digital output                                |
+    | plc_dis           | json 数组      | 跟plc联动时，plc侧设置的 digital input     |
+    | plc_dos           | json 数组     | 跟plc联动时，plc侧设置的 digital output    |
     | id            | int     | di/do 口的序号                                      |
     | value         | int     | di/do 口的值, 0 or 1                                |
 
@@ -3650,12 +4040,14 @@ bool get_scan2pointcloud(ResponseHandler handler);
                 {
                     "i": 0,
                     "x": -2.547891616821289,    // 单位米
-                    "y": -4.289276123046875     // 单位米
+                    "y": -4.289276123046875,     // 单位米
+                    "z": 0                      // 2d slam 场景下为0，3d slam 场景下以实际值为准
                 },
                 {
                     "i": 0,
                     "x": -2.523392677307129,
-                    "y": -4.278434753417969
+                    "y": -4.278434753417969,
+                    "z": 0
                 }
                 //...
             ]
@@ -3731,7 +4123,7 @@ bool get_obst_polygon(ResponseHandler handler);
                     {
                         "x": -1.024999976158142,        // 顶点在 `frame_id` 坐标系下的 x 坐标，// 单位米
                         "y": 0.4099999964237213,        // 顶点在 `frame_id` 坐标系下的 y 坐标。// 单位米
-                        "z": 0                          // 顶点在 `frame_id` 坐标系下的 Z 坐标。// 单位米
+                        "z": 0                          // 顶点在 `frame_id` 坐标系下的 Z 坐标，2d slam 场景下为0,3dslam 场景下以实际值为准。// 单位米
                     },
                     {
                         "x": -1.024999976158142,
@@ -3816,35 +4208,33 @@ bool get_obst_pcl(ResponseHandler handler);
             "points": [
                 {
                     "x": 0.874441385269165,     // 单位米
-                    "y": 0.17772239446640015    // 单位米
+                    "y": 0.17772239446640015,    // 单位米
+                    "z": 0,                     // 单位米，2d slam 场景下为0,3d slam 场景下以实际值为准
+                    "i": 0                      // intensity, 强度信息
                 },
                 {
                     "x": 0.8694524168968201,
-                    "y": 0.17658254504203796
+                    "y": 0.17658254504203796,
+                    "z": 0,                     // 单位米，2d slam 场景下为0,3d slam 场景下以实际值为准
+                    "i": 0                      // intensity, 强度信息
                 },
                 {
                     "x": 0.872018575668335,
-                    "y": 0.18508648872375488
-                },
-                {
-                    "x": 0.8638087511062622,
-                    "y": 0.18587394058704376
+                    "y": 0.18508648872375488,
+                    "z": 0,                     // 单位米，2d slam 场景下为0,3d slam 场景下以实际值为准
+                    "i": 0                      // intensity, 强度信息
                 },
                 {
                     "x": 0.871347188949585,
-                    "y": 0.19091041386127472
+                    "y": 0.19091041386127472,
+                    "z": 0,                     // 单位米，2d slam 场景下为0,3d slam 场景下以实际值为准
+                    "i": 0                      // intensity, 强度信息
                 },
                 {
                     "x": 0.8671715259552002,
-                    "y": 0.19248218834400177
-                },
-                {
-                    "x": 0.8688160181045532,
-                    "y": 0.19582027196884155
-                },
-                {
-                    "x": 0.8730858564376831,
-                    "y": 0.20058690011501312
+                    "y": 0.19248218834400177,
+                    "z": 0,                     // 单位米，2d slam 场景下为0,3d slam 场景下以实际值为准
+                    "i": 0                      // intensity, 强度信息
                 }
             ]
         },
@@ -3919,7 +4309,7 @@ bool get_model_polygon(ResponseHandler handler);
                     {
                         "x": -1.2287168136786537,       // 顶点在 `frame_id` 坐标系下的 x 坐标，// 单位米
                         "y": -0.3162647843895636,       // 顶点在 `frame_id` 坐标系下的 y 坐标。// 单位米
-                        "z": 0                          // 顶点在 `frame_id` 坐标系下的 Z 坐标。// 单位米
+                        "z": 0                          // 顶点在 `frame_id` 坐标系下的 Z 坐标，2d slam 场景下为0,3d slam 场景下以实际值为准。// 单位米
                     },
                     {
                         "x": -0.4206435910414771,
@@ -3976,6 +4366,971 @@ void cancel_get_model_polygon();
 **示例代码**
 ```cpp
 client_->cancel_get_model_polygon();
+```
+
+## enable_robot
+
+**函数签名**
+```cpp
+bool enable_robot(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+【即时动作】开启/关闭机器人使能
+
+**参数**
+* **args**(std::string)
+    json 格式的字符串，例如:
+    ```json
+    {
+        "enable": true  // true: 开启使能， false: 关闭使能
+    }
+    ```
+
+* **handler**(ResponseHandler)
+    当使能机器人完成或发生错误时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->enable_robot(args, handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## set_coordinate_system
+
+**函数签名**
+```cpp
+bool set_coordinate_system(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+【即时动作】切换机器人的坐标系
+
+**参数**
+* **args**(std::string)
+    json 格式的字符串，例如:
+    ```json
+    {
+        "type": 0,      // 坐标系(int)  (0: 关节坐标系 1:机器人坐标系 2:工具坐标系 3:工件坐标系)
+        "arm_type": 1,  // 标系(int)  0:左臂 1:右臂 2:左右臂
+        "frame_id": 1   // 坐标系号(int) 工具坐标系或用户坐标系, 需要设置对应的id (0-32)
+    }
+    ```
+
+* **handler**(ResponseHandler)
+    当切换机器人坐标系完成或发生错误时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->set_coordinate_system(args, handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## set_tool
+
+**函数签名**
+```cpp
+bool set_tool(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+【即时动作】切换机器人的工具
+
+**参数**
+* **args**(std::string)
+    json 格式的字符串，例如:
+    ```json
+    {
+        "type": 0,  // 0:左臂, 1:右臂
+        "num": 1   // 工具号
+    }
+    ```
+
+* **handler**(ResponseHandler)
+    当切换机器人工具完成或发生错误时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->set_tool(args, handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## jog_single_axis
+
+**函数签名**
+```cpp
+bool jog_single_axis(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+【即时动作】单轴点动
+
+**模式限制**
+
+- 支持模式：示教模式
+
+- 说明：仅在上述指定模式下可调用本 API，反之调用失败。
+
+**参数**
+* **args**(std::string)
+    json 格式的字符串，例如:
+    ```json
+    {
+        "is_jogging": 0,    // 是否进入手动模式(int)  范围:0: 退出手动模式  1: 进入手动模式
+        "type": 1,          // 类型(int)     范围:0: 关节运动      1: 笛卡尔坐标系运动
+        "index": 1,         // 轴，关节运动范围: 0-18(19个关节)  笛卡尔坐标系运动:右臂范围: 0-5 (x,y,z,rx,ry,rz)  左臂范围: 6-11 (x,y,z,rx,ry,rz)
+        "positive": 1,      // 正反转(int)   范围:0 , 1
+        "speed": 21        // 速度(int)     范围:0-100 (百分比)
+    }
+    ```
+
+* **handler**(ResponseHandler)
+    当机器人点动完成或发生错误时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->jog_single_axis(args, handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## one_click_homing
+
+**函数签名**
+```cpp
+bool one_click_homing(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+【即时动作】机器人一键回原点
+
+**参数**
+* **args**(std::string)
+    json 格式的字符串，例如:
+    ```json
+    {
+        "max_vel": 0.1 // 最大速度(double,可选)        范围:0-1
+    }
+    ```
+
+* **handler**(ResponseHandler)
+    当机器人回原点完成或发生错误时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->one_click_homing(args, handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## get_teachin_file_list
+
+**函数签名**
+```cpp
+bool get_teachin_file_list(ResponseHandler handler);
+```
+
+**描述**
+获取示教文件列表
+
+**参数**
+* **handler**(ResponseHandler)
+    获取列表完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": [
+            "test.json",
+            "测试点位",
+            "aaaa",
+            ".tmp"
+        ],
+        "data_size": 4,
+        "message": "success"
+    }
+    ```
+    response.data 是一个数组，数组元素为 **示教文件名称**。
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+
+**示例代码**
+```cpp
+bool ret = client_->get_teachin_file_list(handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## get_teachin_file
+
+**函数签名**
+```cpp
+bool get_teachin_file(const std::string& file_name, ResponseHandler handler);
+```
+
+**描述**
+获取示教文件。
+
+示教文件的上传参考 **upload_file**
+
+**参数**
+* **file_name**(std::string)
+    要获取的示教文件名称，例如: aaaa (获取文件名称的典型方法是先调用 get_teachin_file_list 获取服务器上的示教文件列表，然后选中一个文件，就获取了文件名称, 注意：直接传文件名称，没有前缀)
+
+* **handler**(ResponseHandler)
+    获取示教文件完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": {
+            "filename": "./teachin/aaaa"        // 拉取的示教文件存放在程序当前 teachin 目录下(跟地图的 map 目录平级)
+        },
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 表示发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 表示发起异步操作失败，例如， file_name 为空，未提供 handler, 未连接服务器，当前正在获取文件
+
+
+**示例代码**
+```cpp
+bool ret = client_->get_teachin_file("aaaa", handler);
+if (!ret) {
+    //出错处理
+}
+```
+
+## delete_teachin_files
+
+**函数签名**
+```cpp
+bool delete_teachin_files(const std::string& filenames, ResponseHandler handler);
+```
+
+**描述**
+删除示教文件。
+
+**参数**
+* **file_name**(std::string)
+    要删除的示教文件名称列表(获取文件名称的典型方法是先调用 get_teachin_file_list 获取服务器上的示教文件列表，然后选中一个或多个文件，就获取了文件名称, 注意：直接传文件名称，没有前缀)
+    示例：
+    ```json
+    {
+        "filenames": [
+            "aaa",
+            "bbb",
+            "ccc"
+        ]
+    }
+    ```
+
+* **handler**(ResponseHandler)
+    删除示教文件完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": [
+            "File not found: ccc"           // 包含删除失败的信息，例如，没有找到要删除的文件: ccc
+        ],
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 表示发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 表示发起异步操作失败，例如， file_name 为空，未提供 handler, 未连接服务器，当前正在获取文件
+
+
+**示例代码**
+```cpp
+bool ret = client_->delete_teachin_files(filenames, handler);
+if (!ret) {
+    //出错处理
+}
+```
+
+## push_teachin_points
+
+**函数签名**
+```cpp
+bool push_teachin_points(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+推送示教点位数据到服务器
+
+**参数**
+* **args**(std::string)
+    json 格式的字符串，例如:
+    ```json
+    {
+        "data": [
+            {
+                "a": 0,
+                "b": 0,
+                "c": 0,
+                "x": 100,
+                "y": 200,
+                "z": 300
+            },
+            {
+                "a": 10,
+                "b": 10,
+                "c": 10,
+                "x": 110,
+                "y": 210,
+                "z": 310
+            }
+        ],
+        "description": "this is a test file",
+        "filename": "test-teachin"
+    }
+    ```
+    请求参数字段说明:
+    | 字段名称      | 类型         | 含义                                               |
+    |---------------|-------------|----------------------------------------------------|
+    | filename       | string      | 文件名称，指定了保存在服务器上的文件名称，必选字段    |
+    | description    | string      | 对点位数据的描述，必选字段                          |
+    | data          | json array   | 点位数据:**文档中的数据是占位，机器人开发侧还未提供该数据**, 必选字段 |
+
+* **handler**(ResponseHandler)
+    当推送点位数据完成或发生错误时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->push_teachin_points(args, handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## get_teachin_points
+
+**函数签名**
+```cpp
+bool get_teachin_points(const std::string& filename, ResponseHandler handler);
+```
+
+**描述**
+获取示教点位数据。
+
+**跟 get_teachin_file 的区别**
+1. get_teachin_points() 获取的点位数据以json格式的字符串在响应中返回
+2. get_teachin_file() 获取服务器上示教文件中的点位数据，然后保存到本地文件。
+
+**参数**
+* **filename**(std::string)
+    要获取的点位数据所在的示教文件名称，例如: test.json (获取文件名称的典型方法是先调用 get_teachin_file_list 获取服务器上的示教文件列表，然后选中一个文件，就获取了文件名称)
+
+* **handler**(ResponseHandler)
+    当获取点位数据完成或发生错误时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": {
+            "data": [
+                {
+                    "a": 0,
+                    "b": 0,
+                    "c": 0,
+                    "x": 100,
+                    "y": 200,
+                    "z": 300
+                },
+                {
+                    "a": 10,
+                    "b": 10,
+                    "c": 10,
+                    "x": 110,
+                    "y": 210,
+                    "z": 310
+                }
+            ],
+            "description": "this is a test file",
+            "filename": "test-teachin",
+            "saved_time": "2025-09-22 11:45:06"
+        },
+        "message": "success"
+    }
+    ```
+    响应参数字段说明:
+    | 字段名称      | 类型         | 含义                                               |
+    |---------------|-------------|----------------------------------------------------|
+    | code                      | int            | 状态码，0表示成功，非0表示失败        |
+    | message                   | string         | code 非0时，表示对应的错误信息       |
+    | data                      | json object    | 响应数据                            |
+    | data.data                 | json array    | 点位数据                             |
+    | data.data.filename        | string        | 点位数据保存的文件名称                |
+    | data.data.description     | string        | 点位数据描述                          |
+    | data.data.saved_time      | string        | 点位数据的保存时间                    |
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->get_teachin_points("aaaa", handler);
+if (!ret) {
+    //错误处理
+}
+```
+
+## get_robot_state
+
+**函数签名**
+```cpp
+bool get_robot_state(ResponseHandler handler);
+```
+
+**描述**
+获取小车状态
+
+**参数**
+* **handler**(ResponseHandler)
+    请求完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": {
+            "ends": [
+                {
+                    "name": "右臂",
+                    "orientation": {
+                        "rx": -0.007383642575631126,
+                        "ry": 1.4001484707220964,
+                        "rz": -0.0075379594907497086
+                    },
+                    "position": {
+                        "x": 0.49512229024039944,
+                        "y": -0.21929354636269172,
+                        "z": 0.5456004044603542
+                    }
+                },
+                {
+                    "name": "左臂",
+                    "orientation": {
+                        "rx": -3.131812711667153,
+                        "ry": -1.3965734158346133,
+                        "rz": 3.1315136928536913
+                    },
+                    "position": {
+                        "x": 0.4954721606427257,
+                        "y": 0.21864082568536278,
+                        "z": 0.5470286076034586
+                    }
+                }
+            ],
+            "header": {
+                "frame_id": "",
+                "nanosec": 68287282,
+                "sec": 1758876279
+            },
+            "joints": [
+                {
+                    "name": "头左右",
+                    "position": -0.010986328125
+                },
+                {
+                    "name": "头上下",
+                    "position": 0.1888275146484375
+                },
+                {
+                    "name": "右臂1",
+                    "position": 47.907257080078125
+                },
+                {
+                    "name": "右臂2",
+                    "position": 0.04669189453125
+                },
+                {
+                    "name": "右臂3",
+                    "position": 89.9725341796875
+                },
+                {
+                    "name": "右臂4",
+                    "position": -28.6578369140625
+                },
+                {
+                    "name": "右臂5",
+                    "position": -90.01235961914062
+                },
+                {
+                    "name": "右臂6",
+                    "position": 23.262176513671875
+                },
+                {
+                    "name": "右臂7",
+                    "position": -0.00823974609375
+                },
+                {
+                    "name": "踝关节",
+                    "position": 59.93110656738281
+                },
+                {
+                    "name": "膝关节",
+                    "position": -119.96246337890625
+                },
+                {
+                    "name": "腰关节",
+                    "position": 59.98329162597656
+                },
+                {
+                    "name": "左臂1",
+                    "position": 48.02192687988281
+                },
+                {
+                    "name": "左臂2",
+                    "position": -0.05218505859375
+                },
+                {
+                    "name": "左臂3",
+                    "position": 90.01579284667969
+                },
+                {
+                    "name": "左臂4",
+                    "position": -28.71002197265625
+                },
+                {
+                    "name": "左臂5",
+                    "position": -89.97459411621094
+                },
+                {
+                    "name": "左臂6",
+                    "position": 23.29925537109375
+                },
+                {
+                    "name": "左臂7",
+                    "position": 0.0267791748046875
+                }
+            ]
+        },
+        "message": "success"
+    }
+    ```
+    响应字段说明:
+    | 字段名称       | 类型   | 含义                                                |
+    |----------------|--------|-----------------------------------------------------|
+    | code           | int      | 状态码，0表示请求处理成功，非0表示失败              |
+    | message        | string   | 失败信息，例如参数为空                              |
+    | data           | json 对象 | 响应数据                                          |
+    | data.header    | json 对象     | 头信息，包含时间戳等                          |
+    | data.joints     | json 数组     | 关节数组，数组元素详情见下表                                  |
+    | data.ends     | json 数组      | 末端名字数组，数组元素详情见下表                                |
+
+    **data.joints[0]**
+    | 字段名称       | 类型   | 含义                                                |
+    |----------------|--------|-----------------------------------------------------|
+    | name           | string      | 关节名字，例如: "头左右"             |
+    | position        | double      | 关节位置                            |
+    | velocity        | double      | 关节速度                                          |
+    | torque          | double      | 关节力矩                                          |
+    | current         | double      | 关节电流                                          |
+
+    **data.ends[0]**
+    | 字段名称       | 类型   | 含义                                                |
+    |----------------|--------|-----------------------------------------------------|
+    | name           | string      | 关节名字              |
+    | position        | json 对象      | 关节位置                            |
+    | position.x         | double      |                                           |
+    | position.y         | double      |                                           |
+    | position.z         | double      |                                           |
+    | orientation        | json 对象       | 关节姿态                              |
+    | orientation.rx         | double      |                                           |
+    | orientation.ry         | double      |                                           |
+    | orientation.rz         | double      |                                           |
+    | velocity          | json 对象       | 末端的线性速度和旋转速度信息                 |
+    | velocity.vx         | double      |                                           |
+    | velocity.vy         | double      |                                           |
+    | velocity.vz         | double      |                                           |
+    | velocity.wx         | double      |                                           |
+    | velocity.wy         | double      |                                           |
+    | velocity.wz         | double      |                                           |
+
+
+
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->get_robot_state(handler);
+if (!ret) {
+    //失败处理
+}
+```
+
+## cancel_get_robot_state
+
+**函数签名**
+```cpp
+void cancel_get_robot_state();
+```
+
+**描述**
+取消获取机器人状态。
+
+**参数**
+无
+
+**返回值**
+无
+
+**示例代码**
+```cpp
+client_->cancel_get_robot_state();
+```
+
+
+## get_chassis_info
+
+**函数签名**
+```cpp
+bool get_chassis_info(ResponseHandler handler);
+```
+
+**描述**
+获取底盘信息
+
+**参数**
+* **handler**(ResponseHandler)
+    获取底盘信息完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": {
+            "name": "ls"
+        },
+        "message": "success"
+    }
+    ```
+    响应字段说明:
+    | 字段名称            | 类型   | 含义                                                |
+    |--------------------|--------|-----------------------------------------------------|
+    | code               | int      | 状态码，0表示请求处理成功，非0表示失败               |
+    | message            | string   | 失败信息，例如参数为空                              |
+    | data               | json 对象| 响应数据                                           |
+    | data.name         | string    | 底盘名称，对应 chassis0.basic.name        |
+
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->get_chassis_info(handler);
+if (!ret) {
+    //失败处理
+}
+```
+
+## get_broker_connection
+
+**函数签名**
+```cpp
+bool get_broker_connection(ResponseHandler handler);
+```
+
+**描述**
+获取rcs代理连接状态
+
+**参数**
+* **handler**(ResponseHandler)
+    获取rcs代理连接状态完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": {
+            "online": false
+        },
+        "message": "success"
+    }
+    ```
+    响应字段说明:
+    | 字段名称            | 类型   | 含义                                                |
+    |--------------------|--------|-----------------------------------------------------|
+    | code               | int      | 状态码，0表示请求处理成功，非0表示失败               |
+    | message            | string   | 失败信息，例如参数为空                              |
+    | data               | json 对象| 响应数据                                           |
+    | data.online         | bool    | 连接状态，true-上线， false-下线                    |
+
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->get_broker_connection(handler);
+if (!ret) {
+    //失败处理
+}
+```
+
+## set_rcs_online
+
+**函数签名**
+```cpp
+bool set_rcs_online(const std::string& args, ResponseHandler handler);
+```
+
+**描述**
+设置rcs上下线
+
+**参数**
+* **args**
+    请求参数，json 格式字符串，例如：
+    ```json
+    {
+
+        "online": true  // true上线 false下线
+    }
+    ```
+
+* **handler**(ResponseHandler)
+    获取rcs上下线完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->set_rcs_online(args, handler);
+if (!ret) {
+    //失败处理
+}
+```
+
+## soft_reset
+
+**函数签名**
+```cpp
+bool soft_reset(ResponseHandler handler);
+```
+
+**描述**
+【即时动作】设置软复位
+
+**参数**
+* **handler**(ResponseHandler)
+    获取rcs上下线完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->soft_reset(handler);
+if (!ret) {
+    //失败处理
+}
+```
+
+## get_rack_number
+
+**函数签名**
+```cpp
+bool get_rack_number(ResponseHandler handler);
+```
+
+**描述**
+获取货架编号。
+
+**参数**
+* **handler**(ResponseHandler)
+    获取货架编号完成或出错时调用的回调函数。其签名为：
+    ```cpp
+    using ResponseHandler = std::function<void(const std::string&)>
+    ```
+    其参数为操作的结果。json 格式的字符串，例如:
+    ```json
+    {
+        "code": 0,
+        "data": {
+            "rack_number": 0        // 货架编号(整数类型)
+        },
+        "message": "success"
+    }
+    ```
+
+**返回值**
+* true:
+    * 发起异步操作成功，实际结果通过传递给回调函数的参数判断
+* false:
+    * 操作失败，例如，传入的回调函数为空；没有请求名称对应的命令字配置；未连接到服务器
+
+**示例代码**
+```cpp
+bool ret = client_->get_rack_number(handler);
+if (!ret) {
+    //失败处理
+}
 ```
 
 *************************************
@@ -4059,7 +5414,7 @@ int main(int argc, char* argv[])
 
     // 构造 rclcpp::Client 实例
     asio::io_context io_context;
-    auto client = Client::create(io_context);
+    auto client = Client::create(io_context /*requestname2cmd_file=""*/);   // 接收第二可选的参数，指定请求名称命令字段文件路径
 
     // 连接到服务器
     client->connect(argv[1], argv[2], connect_callback);
@@ -4192,62 +5547,97 @@ requestname2cmd.ini
 ```ini
 [config]
 # 控制 0x1xxx
-RELOCATION         = 0x1001
-CONFIRM_RELOCATION = 0x1002
-TRANSLATION        = 0x1003
-ROTATION           = 0x1004
-LIFTING            = 0x1005
-SET_SPEED          = 0x1006
-SET_MOTOR_CONTROL  = 0x1007
-SET_PALLET_ROTATION= 0x1008
-SET_HINT           = 0x1009
-PATH_NAVIGATION    = 0x100a
-REMOTE_CONTROL     = 0x100b
-EMERGENCY_STOP     = 0x100c
-PALLET_ROTATION    = 0x100d
-START_CHARGING     = 0x100e
+RELOCATION               = 0x1001
+CONFIRM_RELOCATION       = 0x1002
+TRANSLATION              = 0x1003
+ROTATION                 = 0x1004
+LIFTING                  = 0x1005
+SET_SPEED                = 0x1006
+SET_MOTOR_CONTROL        = 0x1007
+SET_PALLET_ROTATION      = 0x1008
+SET_HINT                 = 0x1009
+PATH_NAVIGATION          = 0x100a
+REMOTE_CONTROL           = 0x100b
+EMERGENCY_STOP           = 0x100c
+PALLET_ROTATION          = 0x100d
+START_CHARGING           = 0x100e
 
 # 地图 0x2xxx
-PULL_MAP           = 0x2001
-PUSH_MAP           = 0x2002
-GET_AGV_POSITION   = 0x2003
-GET_POINT_CLOUD    = 0x2004
-GET_MAP_LIST       = 0x2005
-GET_LOG_LIST       = 0x2006
-GET_LOG_FILE       = 0x2007
-BUILD_MAPPING      = 0x2008
-LOCALIZATION_QUALITY   = 0x2009
+PULL_MAP                 = 0x2001
+PUSH_MAP                 = 0x2002
+GET_AGV_POSITION         = 0x2003
+GET_POINT_CLOUD          = 0x2004
+GET_MAP_LIST             = 0x2005
+GET_LOG_LIST             = 0x2006
+GET_LOG_FILE             = 0x2007
+BUILD_MAPPING            = 0x2008
+LOCALIZATION_QUALITY     = 0x2009
 
 # 任务 0x3xxx
-QUERY_TASK         = 0x3001
-START_TASK         = 0x3002
-CANCEL_TASK        = 0x3003
-PAUSE_TASK         = 0x3004
-RESUME_TASK        = 0x3005
-GET_RUN_TASK       = 0x3006
+QUERY_TASK               = 0x3001
+START_TASK               = 0x3002
+CANCEL_TASK              = 0x3003
+PAUSE_TASK               = 0x3004
+RESUME_TASK              = 0x3005
+GET_RUN_TASK             = 0x3006
+GET_EXECUTION_QUEUE      = 0x3007
+
+# 配网
+GET_WIFI_LIST            = 0x4001
+SET_WIFI_CONFIG          = 0x4002
+GET_NETWORK_INTERFACE    = 0x4003
+
+# 相机
+GET_QR_CAMERA_DATA       = 0x5001
+
+# 避障
+GET_SCAN2POINTCLOUD     = 0X6001
+GET_OBST_POLYGON        = 0X6002
+GET_OBST_PCL            = 0X6003
+GET_MODEL_POLYGON       = 0x6004
+
+# 双臂机器人控制 0x7xxx
+ENABLE_ROBOT             = 0x7001
+SET_COORDINATE_SYSTEM    = 0x7002
+SET_TOOL                 = 0x7003
+JOG_SINGLE_AXIS          = 0x7004
+JOINT_MOTION             = 0x7005
+LINEAR_MOTION            = 0x7006
+ONE_CLICK_HOMING         = 0x7007
+GET_TEACHIN_FILE_LIST    = 0x7008
+GET_TEACHIN_FILE         = 0x7009
+PUSH_TEACHIN_POINTS      = 0x700a
+GET_TEACHIN_POINTS       = 0x700b
 
 # 其他
-UPLOAD_FILE        = 0xf001
-SET_OPERATING_MODE = 0xf002
-GET_OPERATING_MODE = 0xf003
-REBOOT_OR_POWEROFF = 0xf004
-SET_DATE_TIME      = 0xf005
-GET_DATE_TIME      = 0xf006
-TERMINAL_COMMAND   = 0xf007
-OTA_UPGRADE        = 0xf008
-GET_VELOCITY       = 0xf009
-GET_MCU2PC         = 0xf00a
-GET_CLIENTS        = 0xf00b
-GET_SYSINFO        = 0xf00c
-GET_MODEL_FILE     = 0xf00d
-GET_CAMERA_POINT_CLOUD = 0xf00e
-GET_CAMERA_VIDEO_LIST  = 0xf00f
-GET_CAMERA_VIDEO   = 0xf010
-GET_ERRORS         = 0xf011
-STOP_CHARGING      = 0xf012
-HEART_BEAT         = 0xfefe
-SET_LOG_LEVEL      = 0Xfffe
-UNKOWN_CMD         = 0xffff
+UPLOAD_FILE              = 0xf001
+SET_OPERATING_MODE       = 0xf002
+GET_OPERATING_MODE       = 0xf003
+REBOOT_OR_POWEROFF       = 0xf004
+SET_DATE_TIME            = 0xf005
+GET_DATE_TIME            = 0xf006
+TERMINAL_COMMAND         = 0xf007
+OTA_UPGRADE              = 0xf008
+GET_VELOCITY             = 0xf009
+GET_MCU2PC               = 0xf00a
+GET_CLIENTS              = 0xf00b
+GET_SYSINFO              = 0xf00c
+GET_MODEL_FILE           = 0xf00d
+GET_CAMERA_POINT_CLOUD   = 0xf00e
+GET_CAMERA_VIDEO_LIST    = 0xf00f
+GET_CAMERA_VIDEO         = 0xf010
+GET_ERRORS               = 0xf011
+STOP_CHARGING            = 0xf012
+SET_DO                   = 0xf013
+WAIT_DI                  = 0xf014
+STATION_QR_CODE_RECTIFY  = 0xf015
+CLEAR_ERRORS             = 0xf016
+GET_PLC_DIGITAL_IO       = 0xf017
+CHECK_FD_KEEP_ALIVE      = 0xfefc
+GET_PROCESSES_INFO       = 0xfefd
+HEART_BEAT               = 0xfefe
+SET_LOG_LEVEL            = 0xfffe
+UNKOWN_CMD               = 0xffff
 ```
 
 **三个映射**

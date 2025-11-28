@@ -14,6 +14,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QListWidgetItem>
+#include <QCompleter>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -22,6 +23,20 @@ MainWindow::MainWindow(QWidget *parent)
     // , work_(std::make_unique<asio::io_context::work>(io_context_)) // 初始化 work 对象
 {
     ui->setupUi(this);
+    ui->comboBox->setEditable(true); // 设为可编辑
+
+    // 创建一个 QCompleter
+    QCompleter *completer = new QCompleter(ui->comboBox->model(), this);
+
+    // 设置过滤模式，`Qt::MatchContains` 表示只要包含输入文本就算匹配
+    completer->setFilterMode(Qt::MatchContains);
+
+    // 设置大小写不敏感
+    completer->setCaseSensitivity(Qt::CaseInsensitive);
+
+    // 将 completer 应用到 comboBox
+    ui->comboBox->setCompleter(completer);
+
     ui->comboBox->addItem("RELOCATION");
     ui->comboBox->addItem("CONFIRM_RELOCATION");
     ui->comboBox->addItem("TRANSLATION");
@@ -78,6 +93,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->comboBox->addItem("GET_ERRORS");
     ui->comboBox->addItem("STOP_CHARGING");
     ui->comboBox->addItem("SET_DO");
+    ui->comboBox->addItem("SET_DI");
     ui->comboBox->addItem("CLEAR_ERRORS");
     ui->comboBox->addItem("GET_PROCESSES_INFO");
     ui->comboBox->addItem("CHECK_FD_KEEP_ALIVE");
@@ -106,10 +122,16 @@ MainWindow::MainWindow(QWidget *parent)
     ui->comboBox->addItem("PUSH_TEACHIN_POINTS");
     ui->comboBox->addItem("GET_TEACHIN_POINTS");
     ui->comboBox->addItem("GET_ROBOT_STATE");
-
+    ui->comboBox->addItem("CANCEL_GET_ROBOT_STATE");
+    ui->comboBox->addItem("GET_CHASSIS_INFO");
+    ui->comboBox->addItem("DELETE_TEACHIN_FILES");
+    ui->comboBox->addItem("GET_BROKER_CONNECTION");
+    ui->comboBox->addItem("SET_RCS_ONLINE");
+    ui->comboBox->addItem("SOFT_RESET");
+    ui->comboBox->addItem("GET_RACK_NUMBER");
     QAbstractItemView *view = ui->comboBox->view();
-    view->setMinimumWidth(175);
-    view->setMaximumWidth(175);
+    // view->setMinimumWidth(175);
+    // view->setMaximumWidth(175);
 
     std::thread t([this]() {
         // 创建一个 work 对象，用于保持 io_context 运行
@@ -242,7 +264,8 @@ void MainWindow::on_pushButton_send1_clicked()
         return;
     } else if ("GET_POINT_CLOUD" == strRequestName) {   //获取点云数据
         client_->get_point_cloud([this](const std::string& reply) {
-            this->common_callback(reply);
+            // this->common_callback(reply);
+            std::cerr << std::chrono::high_resolution_clock::now().time_since_epoch().count() / 1000'000 << "\n";
         });
         return;
     } else if ("CANCEL_GET_POINT_CLOUD" == strRequestName) {    //取消获取点云数据
@@ -448,6 +471,16 @@ void MainWindow::on_pushButton_send1_clicked()
             this->common_callback(reply);
         });
         return;
+    } else if ("SET_DI" == strRequestName) {   // 设置输入
+        client_->set_di(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("CLEAR_ERRORS" == strRequestName) {   // 清除错误信息 api (直到底层再次上报错误信息)
+        client_->clear_errors([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
     } else if ("CLEAR_ERRORS" == strRequestName) {   // 清除错误信息 api (直到底层再次上报错误信息)
         client_->clear_errors([this](const std::string& reply) {
             this->common_callback(reply);
@@ -498,8 +531,9 @@ void MainWindow::on_pushButton_send1_clicked()
         client_->cancel_get_qr_camera_data();
         return;
     } else if ("GET_SCAN2POINTCLOUD" == strRequestName) {   // 获取 避障点云
-        client_->get_scan2pointcloud_once([this](const std::string& reply) {
-            this->common_callback(reply);
+        client_->get_scan2pointcloud([this](const std::string& reply) {
+            // this->common_callback(reply);
+            std::cerr << std::chrono::high_resolution_clock::now().time_since_epoch().count() / 1000'000 << "\n";
         });
         return;
     } else if ("CANCEL_GET_SCAN2POINTCLOUD" == strRequestName) {   // 取消获取 避障点云
@@ -577,6 +611,39 @@ void MainWindow::on_pushButton_send1_clicked()
         return;
     } else if ("GET_ROBOT_STATE" == strRequestName) {   // 获取机器人状态
         client_->get_robot_state([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("CANCEL_GET_ROBOT_STATE" == strRequestName) {   // 取消获取机器人状态
+        client_->cancel_get_robot_state();
+        return;
+    } else if ("GET_CHASSIS_INFO" == strRequestName) {   // 获取底盘信息
+        client_->get_chassis_info([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("DELETE_TEACHIN_FILES" == strRequestName) {   // 删除示教文件
+        client_->delete_teachin_files(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("GET_BROKER_CONNECTION" == strRequestName) {   // 获取 broker 连接状态
+        client_->get_broker_connection([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("SET_RCS_ONLINE" == strRequestName) {   // 设置 RCS 在线/离线
+        client_->set_rcs_online(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("SOFT_RESET" == strRequestName) {   // 软复位
+        client_->soft_reset([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("GET_RACK_NUMBER" == strRequestName) {   // 获取货架编号
+        client_->get_rack_number([this](const std::string& reply) {
             this->common_callback(reply);
         });
         return;

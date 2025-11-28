@@ -28,9 +28,9 @@ namespace qclcpp {
  * @param io_context ASIO库的IO上下文对象，用于处理异步I/O操作
  * @return std::shared_ptr<Client> 指向新创建的Client实例的智能指针
  */
-std::shared_ptr<Client> Client::create(asio::io_context& io_context)
+std::shared_ptr<Client> Client::create(asio::io_context& io_context, const std::string& requestname2cmd_file)
 {
-    return std::shared_ptr<Client>(new Client(io_context));
+    return std::shared_ptr<Client>(new Client(io_context, requestname2cmd_file));
 }
 
 void Client::default_switch_callback(bool success)
@@ -111,11 +111,12 @@ void Client::automatic_reconnect()
     heart_beat(asio::error_code());
 }
 
-Client::Client(asio::io_context& io_context)
+Client::Client(asio::io_context& io_context, const std::string& requestname2cmd_file_arg)
     : io_context_(io_context)
     , socket_(io_context)
     , write_in_progress_(false)
     , pointcloud_socket_(io_context)  // 初始化点云专用套接字
+    , get_3dcamera_pointcloud_task_(io_context, "get_3dcamera_pointcloud", [this]() { this->send_request_on_pointcloud_socket("GET_CAMERA_POINT_CLOUD", ""); })
     , get_robot_state_task_(io_context, "get_robot_state", [this]() { this->send_request_on_pointcloud_socket("GET_ROBOT_STATE", ""); })
     , get_model_polygon_task_(io_context, "get_model_polygon", [this]() { this->send_request_on_pointcloud_socket("GET_MODEL_POLYGON", ""); })
     , get_obst_pcl_task_(io_context, "get_obst_pcl", [this]() { this->send_request_on_pointcloud_socket("GET_OBST_PCL", ""); })
@@ -126,7 +127,15 @@ Client::Client(asio::io_context& io_context)
     , get_agv_position_task_(io_context, "get_agv_position", [this]() { this->send_request_on_pointcloud_socket("LOCALIZATION_QUALITY", ""); })
 {
     tmp_suffix_ = ".tmp";
-    load_file(requestname2cmd_file);
+    bool ret = true;
+    std::string config_file = requestname2cmd_file_arg.empty() ? requestname2cmd_file : requestname2cmd_file_arg;
+    ret = load_file(config_file);
+    if (!ret) {
+        std::string error_msg = "failed to load requestname2cmd_file: " + config_file;
+        log_error("%s", error_msg.c_str());
+        throw std::runtime_error(error_msg);
+    }
+
     automatic_reconnect();
 
     connect_lambda = [this](const std::string& host, const std::string& port) {
@@ -138,6 +147,30 @@ Client::Client(asio::io_context& io_context)
             }
         });
     };
+}
+
+// 辅助函数，用于处理延迟重连逻辑
+void Client::reconnect_pointcloud_after_delay()
+{
+    if (!disconnect_by_user_ && main_connected_) {
+        // 创建一个定时器，生命周期由 shared_ptr 管理
+        auto timer = std::make_shared<asio::steady_timer>(io_context_);
+
+        // 设置定时器 1 秒后到期
+        timer->expires_after(asio::chrono::seconds(1));
+
+        // 异步等待定时器，将重连逻辑放入回调
+        timer->async_wait([this, timer](const asio::error_code& ec) {
+            // 如果定时器不是被取消的
+            if (!ec) {
+                log_info("Timer expired, attempting to reconnect pointcloud socket...");
+                connect_pointcloud_socket(current_server_ip_, current_server_port_,
+                    [](bool success) {
+                        log_info("Pointcloud reconnect attempt %s.", success ? "succeeded" : "failed");
+                    });
+            }
+        });
+    }
 }
 
 // 连接点云专用套接字
@@ -199,12 +232,22 @@ void Client::connect(const std::string& host, const std::string& port, std::func
     current_server_ip_ = host;
     current_server_port_ = port;
 
+    // 设置连接超时定时器
+    auto timer = std::make_shared<asio::steady_timer>(io_context_);
+    timer->expires_after(std::chrono::seconds(3));
+    timer->async_wait([this](const asio::error_code& ec) {
+    if (!ec) {
+            socket_.cancel();
+        }
+    });
+
     asio::ip::tcp::resolver resolver(io_context_);
     auto endpoints = resolver.resolve(host, port);
-    asio::async_connect(socket_, endpoints, [this, callback](const std::error_code& ec, const asio::ip::tcp::endpoint& endpoint) {
+    asio::async_connect(socket_, endpoints, [this, callback, timer](const std::error_code& ec, const asio::ip::tcp::endpoint& endpoint) {
         callback(!ec);
         main_connected_ = !ec;
         (void)endpoint; //消除编译告警
+        timer->cancel(); // 取消定时器
         if (!ec) {
             do_read();
 
@@ -278,17 +321,11 @@ void Client::close_socket(std::function<void(const std::string& error)> callback
 void Client::clear_write_status()
 {
     // 清空写入队列, 重置写入标志
+    std::lock_guard<std::mutex> lock(write_queue_mutex_);
     write_in_progress_ = false;
     while (!write_queue_.empty()) {
         write_queue_.pop();
     }
-
-    if (ifile_stream_upload_.is_open()) {
-        ifile_stream_upload_.close();
-    }
-
-    clear_get_file_status();
-    clear_push_file_status();
 }
 
 void Client::disconnect(std::function<void(const std::string& error)> callback)
@@ -329,7 +366,14 @@ std::string Client::create_packet(const std::string& request_name, const std::st
 
 void Client::uuid_to_handler_(const std::string& uuid, ResponseHandler handler)
 {
+    std::lock_guard<std::mutex> lock(handler_mutex_);
     uuid2handlers_[uuid] = handler;
+}
+
+void Client::pointcloud_uuid_to_handler_(const std::string& uuid, ResponseHandler handler)
+{
+    std::lock_guard<std::mutex> lock(pointcloud_handler_mutex_);
+    pointcloud_uuid2handlers_[uuid] = handler;
 }
 
 /**
@@ -352,7 +396,6 @@ bool Client::send_request(const std::string& request_name, const std::string& re
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(write_queue_mutex_);
     // 记录请求，以便在收到响应时调用对应的处理程序
     std::string uuid = strUuid;
     if (uuid.empty()) {
@@ -367,12 +410,12 @@ bool Client::send_request(const std::string& request_name, const std::string& re
         return false;
     }
 
-    write_queue_.emplace(packet);
-    log_debug("write_queue_.size=%lu, write_in_progress_=%d", write_queue_.size(), write_in_progress_);
-    if (write_in_progress_) {
-        log_warn("write in progress, please wait");
-        return false;
+    {
+        // 为保护 write_queue_ 的 emplace 操作而加锁
+        std::lock_guard<std::mutex> lock(write_queue_mutex_);
+        write_queue_.emplace(packet);
     }
+    // log_debug("write_queue_.size=%lu, write_in_progress_=%d", write_queue_.size(), write_in_progress_);
 
     start_next_write();
     return true;
@@ -380,23 +423,28 @@ bool Client::send_request(const std::string& request_name, const std::string& re
 
 void Client::start_next_write()
 {
-    if (write_queue_.empty()) {
-        write_in_progress_ = false;
+    std::lock_guard<std::mutex> lock(write_queue_mutex_);
+
+    // 如果正在写或队列为空，则直接返回。
+    // 这个检查必须在锁内，以防止和 async_write 回调中的状态修改产生竞争。
+    if (write_in_progress_ || write_queue_.empty()) {
         return;
     }
     write_in_progress_ = true;
 
-    auto& front = write_queue_.front();
-    do_send_request(front);
-}
-
-void Client::do_send_request(const std::string& packet)
-{
-    auto msg = std::make_shared<std::string>(packet);
+    // 创建一个 shared_ptr 来管理 packet 的生命周期，这是 Asio 的推荐做法
+    auto msg = std::make_shared<std::string>(write_queue_.front());
 
     // buffer 会生成一个 mutable_buffer 对象，把 msg 指向的地址赋值给 mutable_buffer 的 data_ 成员
     asio::async_write(socket_, asio::buffer(*msg),
                         [this, msg](std::error_code ec, std::size_t bytes_transferred) {
+                            // 再次加锁来修改队列和状态
+                            {
+                                std::lock_guard<std::mutex> lock(write_queue_mutex_);
+                                write_queue_.pop(); // 移除已发送的请求
+                                write_in_progress_ = false;
+                            }
+
                             if (ec) {
                                 log_error("message=%s, value=%d", ec.message().c_str(), ec.value());
                                 // 有可能是服务端关闭了连接
@@ -408,18 +456,9 @@ void Client::do_send_request(const std::string& packet)
                                 clear_get_file_status();
                                 clear_push_file_status();
 
-                                // 弹出失败的请求，继续后续请求处理
-                                std::lock_guard<std::mutex> lock(write_queue_mutex_);
-                                if (write_queue_.size()) {
-                                    log_debug("after pop, write_queue_.size=%lu %s", write_queue_.size(), "->");
-                                    write_queue_.pop();
-                                    log_debug("%lu", write_queue_.size());
-                                    start_next_write();
-                                }
                             } else {
-                                // 请求发送完成，从队列中移除该请求，然后继续发送下一个请求
-                                std::lock_guard<std::mutex> lock(write_queue_mutex_);
-                                write_queue_.pop();
+                                // 成功发送后，立即尝试启动下一个写操作
+                                // 这会形成一个自我驱动的“写循环”
                                 start_next_write();
                             }
                         });
@@ -484,7 +523,11 @@ void Client::clear_upload_file_status()
     if (ifile_stream_upload_.is_open()) {
         ifile_stream_upload_.close();
     }
-    uuid2handlers_.erase(upload_file_uuid_);
+
+    {
+        std::lock_guard<std::mutex> lock(handler_mutex_);
+        uuid2handlers_.erase(upload_file_uuid_);
+    }
 }
 
 void Client::start_upload_file(const asio::error_code& ec)
@@ -704,49 +747,60 @@ void Client::do_read()
             response_.consume(bytes_transferred);
             // 响应格式为: uuid|is_binary|data\r\n\r\n
             reply = reply.substr(0, reply.size() - 4);  //4 is the length of "\r\n\r\n"
+            size_t delim_pos = reply.find('|');
+            auto uuid = reply.substr(0, delim_pos);
+            log_debug("uuid=%s", uuid.c_str());
+            bool is_msgpack = (reply[delim_pos + 1] == '1');
+            std::string response;
+            if (is_msgpack) {
+                response = reply.substr(delim_pos + 3);
+                json obj = json::from_msgpack(response);
+                response = obj.dump();
+            } else {
+                response = reply.substr(delim_pos + 3); // 3 is the length of "|0|"
+            }
+
+            ResponseHandler handler_to_call;
+            bool handler_found = false;
             {
-                // 查找并调用对应的回调函数
+                // 加锁情况下查找和删除 uuid2handlers_ 中的 handler
                 std::lock_guard<std::mutex> lock(handler_mutex_);
-                size_t delim_pos = reply.find('|');
-                auto uuid = reply.substr(0, delim_pos);
-                log_debug("uuid=%s", uuid.c_str());
                 auto iter = uuid2handlers_.find(uuid);
-                bool is_msgpack = (reply[delim_pos + 1] == '1');
-                std::string response;
-                if (is_msgpack) {
-                    response = reply.substr(delim_pos + 3);
-                    json obj = json::from_msgpack(response);
-                    response = obj.dump();
-                } else {
-                    response = reply.substr(delim_pos + 3); // 3 is the length of "|0|"
-                }
                 if (iter != uuid2handlers_.end()) {
-                    iter->second(response);
+                    handler_to_call = iter->second;     // 复制 handler
+                    handler_found = true;
+                    // iter->second(response);
 
-                    // 解析文件上传的返回，如果出错了，取消定时任务
-                    if (uuid == upload_file_uuid_) {
-                        json obj = json::parse(response, nullptr, false);
-                        if (obj.is_discarded() || !obj.is_object() || obj["code"] != 0) {
-                            log_warn(response.c_str());
-                            upload_file_failed_ = true;
-                            do_read();
-                            return;
-                        }
-
-                        // 收到所有文件上传的响应
-                        log_debug("receivedFileSize=%d, file_size_=%d", obj["data"].value("receivedFileSize", 0), file_size_);
-                        if (obj["data"].value("receivedFileSize", 0) >= file_size_) {
-                            clear_upload_file_status();
-                            upload_handler_(R"({"code": 0, "message": "file upload completed"})");
-                        }
-                    }
-
+                    // 删除非文件上传相关的 uuid 映射
                     if (uuid != upload_file_uuid_ && uuid != get_file_uuid_ && uuid != push_file_uuid_) {
                         uuid2handlers_.erase(iter);
                     }
-                } else {
-                    log_error("no handler for uuid: %s", uuid.c_str());
                 }
+            }   // 释放锁
+
+            if (handler_found) {
+                // 在锁外面调用 handler，避免死锁，提高性能
+                handler_to_call(response);
+
+                // 解析文件上传的返回，如果出错了，取消定时任务
+                if (uuid == upload_file_uuid_) {
+                    json obj = json::parse(response, nullptr, false);
+                    if (obj.is_discarded() || !obj.is_object() || obj["code"] != 0) {
+                        log_warn(response.c_str());
+                        upload_file_failed_ = true;
+                        do_read();
+                        return;
+                    }
+
+                    // 收到所有文件上传的响应
+                    log_debug("receivedFileSize=%d, file_size_=%d", obj["data"].value("receivedFileSize", 0), file_size_);
+                    if (obj["data"].value("receivedFileSize", 0) >= file_size_) {
+                        clear_upload_file_status();
+                        upload_handler_(R"({"code": 0, "message": "file upload completed"})");
+                    }
+                }
+            } else {
+                log_error("no handler for uuid: %s", uuid.c_str());
             }
             do_read();
         } else {
@@ -854,7 +908,10 @@ void Client::get_file_callback(const std::string& reply)
     if (obj.value("message", "") == "end") {
         // 服务器返回文件结束标志
         clear_get_file_status();
-        uuid2handlers_.erase(get_file_uuid_);
+        {
+            std::lock_guard<std::mutex> lock(handler_mutex_);
+            uuid2handlers_.erase(get_file_uuid_);
+        }
         std::string result_name = output_file_name_.substr(0, output_file_name_.size() - tmp_suffix_.size());
         json jdata;
         jdata["code"] = 0;
@@ -1049,7 +1106,10 @@ void Client::push_file_callback(const std::string& reply)
     if (obj.is_discarded() || !obj.is_object() || obj.value("code", -1) != 0) {
         push_file_finish_handler_(reply);
         clear_push_file_status();
-        uuid2handlers_.erase(push_file_uuid_);
+        {
+            std::lock_guard<std::mutex> lock(handler_mutex_);
+            uuid2handlers_.erase(push_file_uuid_);
+        }
         return;
     }
 
@@ -1102,7 +1162,10 @@ void Client::push_file_callback(const std::string& reply)
         }
         push_file_finish_handler_(jdata.dump());
         clear_push_file_status();
-        uuid2handlers_.erase(push_file_uuid_);
+        {
+            std::lock_guard<std::mutex> lock(handler_mutex_);
+            uuid2handlers_.erase(push_file_uuid_);
+        }
     }
 }
 
@@ -1216,7 +1279,6 @@ bool Client::get_point_cloud(ResponseHandler handler)
 
 /**
  * @brief 获取点云 api
- *      使用该api前需要先注册回调函数: register_handler("GET_POINT_CLOUD", handler)
  */
 bool Client::get_point_cloud()
 {
@@ -1761,38 +1823,8 @@ bool Client::get_3dcamera_pointcloud(ResponseHandler handler)
 
 bool Client::get_3dcamera_pointcloud()
 {
-    if (!get_3dcamera_pointcloud_timer_) {
-        log_info("3d camera pc timer is null, make it");
-        get_3dcamera_pointcloud_timer_ = std::make_shared<asio::steady_timer>(io_context_);
-    }
-
-    if (!get_3dcamera_pointcloud_running_) {
-        log_info("start get_3dcamera_pointcloud");
-        get_3dcamera_pointcloud(asio::error_code());
-    } else {
-        log_info("get_3dcamera_pointcloud is already running");
-    }
+    get_3dcamera_pointcloud_task_.start(asio::chrono::milliseconds(200));
     return true;
-}
-
-void Client::get_3dcamera_pointcloud(const asio::error_code& ec)
-{
-    // 如果定时器被取消，那么不再需要定期获取3d相机点云了
-    if (ec == asio::error::operation_aborted) {
-        log_info("3d camera timer canceled, %s", ec.message().c_str());
-        get_3dcamera_pointcloud_running_ = false;
-        return;
-    }
-    get_3dcamera_pointcloud_running_ = true;
-
-    // 使用专用连接发送请求
-    log_debug("get 3d camera\n");
-    send_request_on_pointcloud_socket("GET_CAMERA_POINT_CLOUD", "");
-
-    get_3dcamera_pointcloud_timer_->expires_after(asio::chrono::milliseconds(200));
-    get_3dcamera_pointcloud_timer_->async_wait([this](const asio::error_code& ec) {
-        get_3dcamera_pointcloud(ec);
-    });
 }
 
 // 单次获取3d点云，方便调试
@@ -1834,11 +1866,7 @@ bool Client::get_3dcamera_pointcloud_single(const std::string& args, ResponseHan
  */
 void Client::cancel_get_3dcamera_pointcloud()
 {
-    if (get_3dcamera_pointcloud_running_ && get_3dcamera_pointcloud_timer_) {
-        get_3dcamera_pointcloud_timer_->cancel();
-    } else {
-        log_info("get_3dcamera_pointcloud_timer_ is null, nothing to cancel");
-    }
+    get_3dcamera_pointcloud_task_.stop();
 }
 
 void Client::do_read_pointcloud()
@@ -1863,13 +1891,13 @@ void Client::do_read_pointcloud()
 
                 // 处理响应
                 {
-                    std::lock_guard<std::mutex> lock(handler_mutex_);
+                    std::lock_guard<std::mutex> lock(pointcloud_handler_mutex_);
                     size_t delim_pos = reply.find('|');
                     if (delim_pos != std::string::npos) {
                         auto uuid = reply.substr(0, delim_pos);
                         log_debug("pointcloud uuid=%s", uuid.c_str());
 
-                        auto iter = uuid2handlers_.find(uuid);
+                        auto iter = pointcloud_uuid2handlers_.find(uuid);
                         bool is_binary = (reply[delim_pos + 1] == '2' ? true : false);
                         std::string response;
 
@@ -1879,9 +1907,9 @@ void Client::do_read_pointcloud()
                             response = reply.substr(delim_pos + 3); // 3 is the length of "|0|"
                         }
 
-                        if (iter != uuid2handlers_.end()) {
+                        if (iter != pointcloud_uuid2handlers_.end()) {
                             iter->second(response);
-                            uuid2handlers_.erase(iter);
+                            pointcloud_uuid2handlers_.erase(iter);
                         }
                     }
                 }
@@ -1900,16 +1928,8 @@ void Client::do_read_pointcloud()
                 close_pointcloud_socket();
 
                 // 尝试重连点云连接
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                // 单次请求点云时，断开后就不重连了
-                if (!disconnect_by_user_ && main_connected_) {
-                    connect_pointcloud_socket(current_server_ip_, current_server_port_,
-                        [](bool success) {
-                            if (success) {
-                                log_info("pointcloud reconnected");
-                            }
-                        });
-                }
+                // 使用非阻塞的异步定时器来延迟重连
+                reconnect_pointcloud_after_delay();
             }
         });
 }
@@ -1920,7 +1940,6 @@ bool Client::send_request_on_pointcloud_socket(const std::string& request_name, 
     std::unique_lock<std::mutex> lock(pointcloud_connection_mutex_);
 
     if (!pointcloud_socket_.is_open() || !pointcloud_connected_) {
-        ResponseHandler& handler = requestname2handlers_[request_name];
         log_error("pointcloud socket is not open");
 
         // 尝试重连点云连接
@@ -1942,8 +1961,8 @@ bool Client::send_request_on_pointcloud_socket(const std::string& request_name, 
 
     // 注册回调
     ResponseHandler& handler = requestname2handlers_[request_name];
-    uuid_to_handler_(uuid, handler);
-    log_debug("[%s]->[%s], uuid2handlers_.size=%ld", request_name.c_str(), uuid.c_str(), uuid2handlers_.size());
+    pointcloud_uuid_to_handler_(uuid, handler);
+    log_debug("[%s]->[%s], pointcloud_uuid2handlers_.size=%ld", request_name.c_str(), uuid.c_str(), pointcloud_uuid2handlers_.size());
 
     // 创建请求包
     std::string packet = create_packet(request_name, uuid, request);
@@ -1954,19 +1973,15 @@ bool Client::send_request_on_pointcloud_socket(const std::string& request_name, 
     // 发送请求
     auto msg = std::make_shared<std::string>(packet);
     asio::async_write(pointcloud_socket_, asio::buffer(*msg),
-        [this, msg, &lock](std::error_code ec, std::size_t bytes_transferred) {
+        [this, msg](std::error_code ec, std::size_t bytes_transferred) {
         if (ec) {
             log_error("pointcloud write error: %s, value=%d", ec.message().c_str(), ec.value());
 
             // 点云连接失败时尝试重连
             if (!disconnect_by_user_) {
                 close_pointcloud_socket();
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                lock.unlock();
-                connect_pointcloud_socket(current_server_ip_, current_server_port_,
-                    [](bool success) {
-                        log_info("pointcloud reconnect after write error %s", success ? "succeeded" : "failed");
-                    });
+                // 使用非阻塞的异步定时器来延迟重连
+                reconnect_pointcloud_after_delay();
             }
         }
     });
@@ -2273,6 +2288,17 @@ bool Client::set_do(const std::string& args)
     return send_request("SET_DO", args);
 }
 
+// 设置输入 api
+// 小车等待数字量输入变化
+bool Client::set_di(const std::string& args, ResponseHandler handler)
+{
+    return process_request("WAIT_DI", handler, [this, &args]() {return set_di(args);});
+}
+bool Client::set_di(const std::string& args)
+{
+    return send_request("WAIT_DI", args);
+}
+
 // 清除错误信息 api (直到底层再次上报错误信息)
 bool Client::clear_errors(ResponseHandler handler)
 {
@@ -2373,7 +2399,7 @@ bool Client::get_scan2pointcloud(ResponseHandler handler)
 
 bool Client::get_scan2pointcloud()
 {
-    get_scan2pointcloud_task_.start(asio::chrono::milliseconds(70));
+    get_scan2pointcloud_task_.start(asio::chrono::milliseconds(200));
     return true;
 }
 
@@ -2603,7 +2629,8 @@ bool Client::get_robot_state(ResponseHandler handler)
 
 bool Client::get_robot_state()
 {
-    get_robot_state_task_.start(asio::chrono::milliseconds(1000));
+    // 20hz
+    get_robot_state_task_.start(asio::chrono::milliseconds(50));
     return true;
 }
 
@@ -2617,4 +2644,67 @@ void Client::cancel_get_robot_state()
     get_robot_state_task_.stop();
 }
 
-}   //end of namespace
+// 获取底盘信息api
+bool Client::get_chassis_info(ResponseHandler handler)
+{
+    return process_request("GET_CHASSIS_INFO", handler, [this]() {return get_chassis_info();});
+}
+
+bool Client::get_chassis_info()
+{
+    return send_request("GET_CHASSIS_INFO", "");
+}
+
+// 删除示教点位数据文件 api
+bool Client::delete_teachin_files(const std::string& filenames, ResponseHandler handler)
+{
+    return process_request("DELETE_TEACHIN_FILES", handler, [this, &filenames]() {return delete_teachin_files(filenames);});
+}
+bool Client::delete_teachin_files(const std::string& filenames)
+{
+    return send_request("DELETE_TEACHIN_FILES", filenames);
+}
+
+bool Client::get_broker_connection(ResponseHandler handler)
+{
+    return process_request("GET_BROKER_CONNECTION", handler, [this]() {return get_broker_connection();});
+}
+
+bool Client::get_broker_connection()
+{
+    return send_request("GET_BROKER_CONNECTION", "");
+}
+
+// 控制 rcs 上下线
+bool Client::set_rcs_online(const std::string& args, ResponseHandler handler)
+{
+    return process_request("SET_RCS_ONLINE", handler, [this, &args]() { return set_rcs_online(args); });
+}
+
+bool Client::set_rcs_online(const std::string& args)
+{
+    return send_request("SET_RCS_ONLINE", args);
+}
+
+bool Client::soft_reset(ResponseHandler handler)
+{
+    return process_request("SOFT_RESET", handler, [this]() { return soft_reset(); });
+}
+
+bool Client::soft_reset()
+{
+    return send_request("SOFT_RESET", "");
+}
+
+// GET_RACK_NUMBER
+bool Client::get_rack_number(ResponseHandler handler)
+{
+    return process_request("GET_RACK_NUMBER", handler, [this]() {return get_rack_number();});
+}
+
+bool Client::get_rack_number()
+{
+    return send_request("GET_RACK_NUMBER", "");
+}
+
+}//end of namespace

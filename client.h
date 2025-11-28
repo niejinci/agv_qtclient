@@ -9,7 +9,7 @@
 #include <mutex>
 #include <queue>
 #include <fstream>
-#include "periodicTask.h"
+#include "periodic_task.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -58,7 +58,7 @@ public:
     using ResponseHandler = std::function<void(const std::string&)>;
     using SwitchServerCallback = std::function<void(bool)>;
 
-    static std::shared_ptr<Client> create(asio::io_context& io_context);
+    static std::shared_ptr<Client> create(asio::io_context& io_context, const std::string& requestname2cmd_file="");
     void connect(const std::string& host, const std::string& port, std::function<void(bool)> callback);
     bool upload_file(const std::string& args, ResponseHandler handler);
 
@@ -107,6 +107,7 @@ public:
     bool get_model_file(const std::string& file_name, ResponseHandler handler);
     bool stop_charging(ResponseHandler handler);
     bool set_do(const std::string& args, ResponseHandler handler);
+    bool set_di(const std::string& args, ResponseHandler handler);
     bool clear_errors(ResponseHandler handler);
 
     // 检测ip列表的连接性
@@ -150,6 +151,8 @@ public:
     bool get_model_polygon(ResponseHandler handler);
     void cancel_get_model_polygon();
 
+    bool get_chassis_info(ResponseHandler handler);
+
     // 新增：双臂机器人控制 API
     bool enable_robot(const std::string& args, ResponseHandler handler);
     bool set_coordinate_system(const std::string& args, ResponseHandler handler);
@@ -160,9 +163,15 @@ public:
     bool get_teachin_file(const std::string& file_name, ResponseHandler handler);
     bool push_teachin_points(const std::string& points, ResponseHandler handler);
     bool get_teachin_points(const std::string& file_name, ResponseHandler handler);
+    bool delete_teachin_files(const std::string& filenames, ResponseHandler handler);
 
     bool get_robot_state(ResponseHandler handler);
     void cancel_get_robot_state();
+
+    bool get_broker_connection(ResponseHandler handler);
+    bool set_rcs_online(const std::string& args, ResponseHandler handler);
+    bool soft_reset(ResponseHandler handler);
+    bool get_rack_number(ResponseHandler handler);
 
 public:
     // 单次调用接口
@@ -172,17 +181,17 @@ public:
     bool get_model_polygon_once(ResponseHandler handler);
 
 private:
-    Client(asio::io_context& io_context);
+    Client(asio::io_context& io_context, const std::string& requestname2cmd_file_arg="");
     void do_read();
     static std::string generate_uuid_v4();
     void uuid_to_handler_(const std::string& uuid, ResponseHandler handler);
+    void pointcloud_uuid_to_handler_(const std::string& uuid, ResponseHandler handler);
     std::string create_packet(const std::string& request_name, const std::string& uuid, const std::string& msg);
-    void do_send_request(const std::string& packet);
     void start_next_write();
     void do_write_chunk();
     void close_socket(std::function<void(const std::string& error)> callback = default_disconnect_callback);
     void clear_write_status();
-
+    void reconnect_pointcloud_after_delay();
     bool download_file_in_progress_ = false;
     struct DownloadResult {
         bool success;
@@ -237,10 +246,12 @@ private:
     asio::streambuf response_;
     std::unordered_map<std::string, ResponseHandler> requestname2handlers_;
     std::unordered_map<std::string, ResponseHandler> uuid2handlers_;
+    std::unordered_map<std::string, ResponseHandler> pointcloud_uuid2handlers_;
     std::ifstream ifile_stream_upload_;
     std::array<char, 8192> buffer_;
     ResponseHandler upload_handler_;
     std::mutex handler_mutex_;
+    std::mutex pointcloud_handler_mutex_;
     std::queue<std::string> write_queue_;
     std::mutex write_queue_mutex_;
     std::mutex upload_file_mutex_;
@@ -275,10 +286,6 @@ private:
     // ota 升级
     std::shared_ptr<asio::steady_timer> ota_upgrade_timer_;
 
-    // 3d摄像头点云
-    void get_3dcamera_pointcloud(const asio::error_code& ec);
-    std::shared_ptr<asio::steady_timer> get_3dcamera_pointcloud_timer_;
-    bool get_3dcamera_pointcloud_running_ = false;
     // 添加的新函数声明
     void connect_pointcloud_socket(const std::string& host, const std::string& port, std::function<void(bool)> callback);
     void do_read_pointcloud();
@@ -342,7 +349,13 @@ private:
     bool get_errors();
     bool stop_charging();
     bool set_do(const std::string& args);
+    bool set_di(const std::string& args);
     bool clear_errors();
+    bool get_chassis_info();
+    bool get_broker_connection();
+    bool set_rcs_online(const std::string& args);
+    bool soft_reset();
+    bool get_rack_number();
 
     // 新增：双臂机器人控制 API 的私有实现
     bool enable_robot(const std::string& args);
@@ -353,6 +366,7 @@ private:
     bool get_teachin_file_list();
     bool push_teachin_points(const std::string& points);
     bool get_teachin_points(const std::string& file_name);
+    bool delete_teachin_files(const std::string& filenames);
 
     bool is_directory(const std::string& path);
     std::string get_response(ERROR_CODE ec, const std::string& msg);
@@ -361,6 +375,7 @@ private:
     bool send_request(const std::string& request_name, const std::string& request, const std::string& uuid="");
 
     // 重构后的周期性任务
+    PeriodicTask get_3dcamera_pointcloud_task_;
     PeriodicTask get_robot_state_task_;
     PeriodicTask get_model_polygon_task_;
     PeriodicTask get_obst_pcl_task_;
