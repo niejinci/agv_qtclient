@@ -129,6 +129,22 @@ MainWindow::MainWindow(QWidget *parent)
     ui->comboBox->addItem("SET_RCS_ONLINE");
     ui->comboBox->addItem("SOFT_RESET");
     ui->comboBox->addItem("GET_RACK_NUMBER");
+    ui->comboBox->addItem("GET_SHOWMAP_FORCE");
+    ui->comboBox->addItem("CHECK_SHOWMAP_UPDATE_STATUS");
+    ui->comboBox->addItem("GET_SHOWMAP_IF");     // 先检查地图文件是否有更新，再决定是否获取地图文件
+    ui->comboBox->addItem("SET_AGV_POSITION_INTERVAL");
+    ui->comboBox->addItem("START_MAPPING");
+    ui->comboBox->addItem("SAVE_LOCATION_MAP");
+    ui->comboBox->addItem("END_MAPPING");
+    ui->comboBox->addItem("GET_WARES");
+    ui->comboBox->addItem("DELETE_WARE");
+    ui->comboBox->addItem("MODIFY_WARE");
+    ui->comboBox->addItem("ADD_WARE");
+    ui->comboBox->addItem("UPLOAD_MAP_DATA");
+    ui->comboBox->addItem("DOWNLOAD_MAP_DATA");
+    ui->comboBox->addItem("GET_MULTI_MAP_FILES");
+    ui->comboBox->addItem("START_QR_MAPPING");
+    ui->comboBox->addItem("STOP_QR_MAPPING");
     QAbstractItemView *view = ui->comboBox->view();
     // view->setMinimumWidth(175);
     // view->setMaximumWidth(175);
@@ -646,6 +662,97 @@ void MainWindow::on_pushButton_send1_clicked()
         client_->get_rack_number([this](const std::string& reply) {
             this->common_callback(reply);
         });
+        return;
+    } else if ("GET_SHOWMAP_FORCE" == strRequestName) {   //获取在线建图地图文件
+        client_->get_showmap_force(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    }  else if ("CHECK_SHOWMAP_UPDATE_STATUS" == strRequestName) {   // 检查在线建图地图更新状态
+        client_->check_showmap_update_status(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("GET_SHOWMAP_IF" == strRequestName) {   // 获取在线建图地图文件(先检查更新)
+        client_->get_showmap_if(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("SET_AGV_POSITION_INTERVAL" == strRequestName) {
+        client_->set_agv_position_interval(std::stoi(strText.toStdString()));
+        return;
+    } // START_MAPPING
+      else if ("START_MAPPING" == strRequestName) {
+        client_->start_mapping([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("SAVE_LOCATION_MAP" == strRequestName) {
+        client_->save_location_map(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("END_MAPPING" == strRequestName) {
+        client_->end_mapping([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } // GET_WARES
+    else if ("GET_WARES" == strRequestName) {
+        client_->get_wares([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    }
+    // DELETE_WARE
+    else if ("DELETE_WARE" == strRequestName) {
+        client_->delete_ware(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    }
+    // MODIFY_WARE
+    else if ("MODIFY_WARE" == strRequestName) {
+        client_->modify_ware(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    }
+    // ADD_WARE
+    else if ("ADD_WARE" == strRequestName) {
+        client_->add_ware(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("UPLOAD_MAP_DATA" == strRequestName) {
+        client_->upload_map_data(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("DOWNLOAD_MAP_DATA" == strRequestName) {
+        client_->download_map_data(strText.toStdString(), [this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } // GET_MULTI_MAP_FILES
+    else if ("GET_MULTI_MAP_FILES" == strRequestName) {
+        client_->get_multi_map_files([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("START_QR_MAPPING" == strRequestName) {
+        client_->start_qr_mapping([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    } else if ("STOP_QR_MAPPING" == strRequestName) {
+        client_->stop_qr_mapping([this](const std::string& reply) {
+            this->common_callback(reply);
+        });
+        return;
+    }
+    else {
+        QMessageBox::warning(this, "send", "unknown request name");
         return;
     }
 }

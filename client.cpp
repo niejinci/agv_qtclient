@@ -13,12 +13,15 @@
 #include "log.h"
 #include <thread>
 #include <cstdio>
+#include <regex>
+#include <algorithm>
 
 using json = nlohmann::json;
 using namespace nlohmann::literals::json_literals;
 
 namespace qclcpp {
 
+std::mutex Client::libssh2_init_mutex_;
 /**
  * @brief 创建Client实例的工厂方法
  *
@@ -211,6 +214,50 @@ void Client::connect_pointcloud_socket(const std::string& host, const std::strin
 }
 
 /**
+ * @brief 校验端口
+ *  规则：非空、纯数字、范围 0-65535
+ * @param portStr 字符串格式的端口号
+ * @return true 端口合法
+ * @return false 端口不合法
+ */
+bool Client::is_valid_port(const std::string& portStr)
+{
+    if (portStr.empty()) {
+        return false;
+    }
+
+    // 检查是否全为数字
+    if (!std::all_of(portStr.begin(), portStr.end(), ::isdigit)) {
+        return false;
+    }
+
+    // 检查数字范围
+    try {
+        int port = std::stoi(portStr);
+        return port >= 0 && port <= 65535;
+    } catch (...) {
+        // 捕获 std::stoi 可能抛出的异常（如超长数字导致的 out_of_range）
+        return false;
+    }
+}
+
+/**
+ * @brief 校验 IPv4
+ *  规则：使用正则匹配 standard IPv4 格式 (0-255).(0-255).(0-255).(0-255)
+ * @param ip 字符串格式的ip地址
+ * @return true ip合法
+ * @return false ip不合法
+ */
+bool Client::is_valid_ipv4(const std::string& ip)
+{
+    // 使用 static const 避免每次调用函数都重新编译正则表达式，提高性能
+    static const std::regex ipv4Regex(
+        R"(^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$)"
+    );
+    return std::regex_match(ip, ipv4Regex);
+}
+
+/**
  * @brief 连接到指定的服务器。
  *
  * 此函数尝试建立与服务器的TCP连接。
@@ -224,6 +271,20 @@ void Client::connect_pointcloud_socket(const std::string& host, const std::strin
  */
 void Client::connect(const std::string& host, const std::string& port, std::function<void(bool)> callback)
 {
+    // 1. 校验 Port (通常计算成本较低，先校验)
+    if (!is_valid_port(port)) {
+        std::cerr << "[Error] Invalid port: " << port << std::endl;
+        if (callback) callback(false);
+        return;
+    }
+
+    // 2. 校验 Host (IPv4)
+    if (!is_valid_ipv4(host)) {
+        std::cerr << "[Error] Invalid IPv4 address: " << host << std::endl;
+        if (callback) callback(false);
+        return;
+    }
+
     // 关闭现有的连接
     close_socket();
     clear_write_status();
@@ -334,6 +395,7 @@ void Client::disconnect(std::function<void(const std::string& error)> callback)
     clear_write_status();
 
     disconnect_by_user_ = true;
+    current_server_ip_.clear();
 }
 
 // 实现切换服务器的函数
@@ -580,12 +642,12 @@ bool Client::upload_file(const std::string& args, ResponseHandler handler)
 {
     json jargs = json::parse(args, nullptr, false);
     if (jargs.is_discarded() || !jargs.is_object()) {
-        log_error("invalid argument, please check your input");
+        log_error("invalid argument: " + args);
         return false;
     }
     if (!jargs.contains("filepath") || !jargs["filepath"].is_string()
             || (jargs.contains("type") && !jargs["type"].is_string())) {
-        log_error("invalid argument field, please check your input");
+        log_error("invalid argument field: " + args);
         return false;
     }
     std::string file_path = jargs["filepath"].get<std::string>();
@@ -796,7 +858,7 @@ void Client::do_read()
                     log_debug("receivedFileSize=%d, file_size_=%d", obj["data"].value("receivedFileSize", 0), file_size_);
                     if (obj["data"].value("receivedFileSize", 0) >= file_size_) {
                         clear_upload_file_status();
-                        upload_handler_(R"({"code": 0, "message": "file upload completed"})");
+                        upload_handler_(obj.dump());
                     }
                 }
             } else {
@@ -853,10 +915,15 @@ bool Client::get_agv_position(ResponseHandler handler)
 
 bool Client::get_agv_position()
 {
-    get_agv_position_task_.start(asio::chrono::milliseconds(100));
+    get_agv_position_task_.start(asio::chrono::milliseconds(200));
     return true;
 }
 
+// 设置获取小车位置的时间间隔，单位毫秒
+void Client::set_agv_position_interval(int interval_ms)
+{
+    get_agv_position_task_.set_interval(asio::chrono::milliseconds(interval_ms));
+}
 /**
  * @brief 删除获取小车位置的定时器 api
  *
@@ -954,13 +1021,15 @@ bool Client::is_directory(const std::string& path)
 /**
  * @brief 创建目录
  *
- * @param file_name 文件命令，例如: pc/x/x.smap
- * @param dir_path 要创建的目录名称，例如: map/pc/x/
+ * @param[in] file_name  [in] 文件命令，例如: pc/x/x.smap
+ * @param[out] dir_path  [out] 要创建的目录名称，例如: map/pc/x/
+ * @param[in] file_type  [in] 文件类型
  * @return true 创建成功
  * @return false 创建失败
  */
 bool Client::create_directory(const std::string& file_name, std::string& dir_path, FILE_TYPE file_type)
 {
+    // 根据文件类型设置目录前缀
     dir_path = "map/";
     if (file_type == LOG_FILE) {
         dir_path = "log/";
@@ -970,9 +1039,12 @@ bool Client::create_directory(const std::string& file_name, std::string& dir_pat
         dir_path = "video/";
     } else if (file_type == TEACHIN_FILE) {
         dir_path = "teachin/";
+    } else if (file_type == SHOWMAP_FILE) {
+        dir_path = "showmap/";
     }
 
-    // 查找字符中的 /
+    // 解析文件名称中的相对路径
+    // 查找文件名称中最后一个 /
     std::size_t pos = file_name.find_last_of('/');
     if (pos != std::string::npos) {
         // 输入中包含 /
@@ -980,11 +1052,13 @@ bool Client::create_directory(const std::string& file_name, std::string& dir_pat
         dir_path += "/";
     }
 
+    // 检查目录是否已存在
     if (is_directory(dir_path)) {
         return true;
     }
 
-    // 递归创建目录
+    // 循环查找路径中的每一个 '/'，逐级截取并创建目录
+    // 例如 dir_path 为 "log/subdir/"，第一次循环处理 "log"，第二次处理 "log/subdir"
     std::size_t start = 0;
     std::size_t end;
     while ((end = dir_path.find('/', start)) != std::string::npos) {
@@ -997,6 +1071,8 @@ bool Client::create_directory(const std::string& file_name, std::string& dir_pat
     #endif
             return false;
         }
+
+        // 更新搜索起点位置，继续寻找下一个 '/'
         start = end + 1;
     }
 
@@ -1282,7 +1358,7 @@ bool Client::get_point_cloud(ResponseHandler handler)
  */
 bool Client::get_point_cloud()
 {
-    get_point_cloud_task_.start(asio::chrono::milliseconds(100));
+    get_point_cloud_task_.start(asio::chrono::milliseconds(200));
     return true;
 }
 
@@ -2019,8 +2095,96 @@ bool Client::get_camera_video_list()
  */
 bool Client::get_camera_video(const std::string& args, ResponseHandler handler)
 {
+    return start_download_task(args, handler, VIDEO_FILE, is_downloading_video_);
+}
+
+/**
+ * @brief 获取在线建图地图文件 api
+ *
+ * @param args [opt] json格式的字符串，同get_camera_video函数的args参数，提供默认参数
+ * 默认值:
+ * host: current_server_ip_
+ * port: "22"
+ * username: "byd"
+ * password: "123"
+ * remote_file: "dynamic_mapping_map.png"
+ * @param handler 响应处理函数
+ * @return true 发起异步请求成功。
+ * @return false 请求失败，还未发起异步操作。
+ */
+bool Client::get_showmap_force(const std::string& args, ResponseHandler handler)
+{
+    json jargs;
+
+    // 1. 尝试解析输入，如果输入为空或非法，则初始化为空对象，以便后续填充默认值
+    if (args.empty()) {
+        jargs = json::object();
+    } else {
+        jargs = json::parse(args, nullptr, false);
+        if (jargs.is_discarded() || !jargs.is_object()) {
+            // 如果传入了非 JSON 格式的字符串（乱码等），视为无效输入
+            log_warn("get_showmap_force received invalid json,");
+            return false;
+        }
+    }
+
+    // 2. 填充默认值 (如果是空值或者不存在该key，则应用默认值)
+    // 注意：value() 方法：如果 key 存在，返回其值；否则返回默认值。
+
+    // Host: 如果没有 host 字段，或者 host 字段为空字符串，则使用 current_server_ip_
+    if (!jargs.contains("host") || jargs["host"].get<std::string>().empty()) {
+        if (current_server_ip_.empty()) {
+            log_error("current_server_ip_ is empty, cannot use default host");
+            return false;
+        }
+        jargs["host"] = current_server_ip_;
+    }
+
+    // Port
+    if (!jargs.contains("port") || jargs["port"].get<std::string>().empty()) {
+        jargs["port"] = "22";
+    }
+
+    // Username
+    if (!jargs.contains("username") || jargs["username"].get<std::string>().empty()) {
+        jargs["username"] = "byd";
+    }
+
+    // Password
+    if (!jargs.contains("password") || jargs["password"].get<std::string>().empty()) {
+        jargs["password"] = "123";
+    }
+
+    // Remote File
+    if (!jargs.contains("remote_file") || jargs["remote_file"].get<std::string>().empty()) {
+        jargs["remote_file"] = "dynamic_mapping_map.png";
+    }
+
+    return start_download_task(jargs.dump(), handler, SHOWMAP_FILE, is_downloading_map_);
+}
+
+/**
+ * @brief 开始下载任务的通用函数
+ * 解析json参数，检查特定任务的状态锁、创建目录、启动线程。
+ * @param args 请求参数的json字符串
+ * @param handler 响应处理函数
+ * @param file_type 文件类型枚举
+ * @param state_flag 任务状态标志的原子引用
+ * @return true
+ * @return false
+ *
+ * @note 使用 libssh 库的SCP协议从远程服务器下载文件，下载完成后通过io_context_在主线程中回调handler处理响应。
+ */
+bool Client::start_download_task(const std::string& args, ResponseHandler handler,
+                                 FILE_TYPE file_type, std::atomic<bool>& state_flag)
+{
     if (!handler) {
         log_error("handler is empty");
+        return false;
+    }
+
+    if (state_flag) {
+        log_error("Task for this file type is already in progress, please wait");
         return false;
     }
 
@@ -2038,11 +2202,6 @@ bool Client::get_camera_video(const std::string& args, ResponseHandler handler)
         return false;
     }
 
-    if (download_file_in_progress_) {
-        log_error("downloading another file now , please wait");
-        return false;
-    }
-    download_file_in_progress_ = true;
     std::string file_name = jargs.value("remote_file", "");
     if (file_name.empty()) {
         log_error("get file name is empty");
@@ -2050,24 +2209,34 @@ bool Client::get_camera_video(const std::string& args, ResponseHandler handler)
     }
 
     std::string dir_path;
-    if (!create_directory(file_name, dir_path, VIDEO_FILE)) {
+    if (!create_directory(file_name, dir_path, file_type)) {
         log_error("create directory failed: " + dir_path);
         return false;
     }
 
+    // 设置状态为正在下载
+    state_flag = true;
+
+    // 准备下载参数
     std::string host = jargs["host"].get<std::string>();
     std::string port = jargs.contains("port") ? jargs["port"].get<std::string>() : "22";
     std::string username = jargs["username"].get<std::string>();
     std::string passwd = jargs["password"].get<std::string>();
-    std::string remote_file = "/home/" + username + "/docker_share/video/" + file_name;
-    std::string local_file = "./video/" + file_name;
+    // 下载建图产生的地图时用到
+    long local_last_mtime = jargs.value("local_last_mtime", 0L);
+
+    // 根据类型构建远程和本地路径
+    std::string type_folder = (file_type == VIDEO_FILE) ? "video" : "showmap";
+    std::string remote_file = "/home/" + username + "/docker_share/" + type_folder + "/" + file_name;
+    std::string local_file = "./" + type_folder + "/" + file_name;
+
     log_debug("[%s:%s]", host.c_str(), port.c_str());
     log_debug("[%s:%s]", username.c_str(), passwd.c_str());
     log_debug("remote_file=%s", remote_file.c_str());
     log_debug("local_file=%s", local_file.c_str());
 
     // 异步执行下载任务
-    std::thread download_thread([this, handler, host, port, username, passwd, remote_file, local_file]() {
+    std::thread download_thread([this, handler, host, port, username, passwd, remote_file, local_file, local_last_mtime, &state_flag]() {
         // 使用SCP方式下载(高效方式)
         std::cerr << "ready download file with ssh2" << std::endl;
         auto scp_success = download_file_ssh(host, port, username, passwd, remote_file, local_file);
@@ -2079,6 +2248,9 @@ bool Client::get_camera_video(const std::string& args, ResponseHandler handler)
             response_json["message"] = "success";
             response_json["data"] = json();
             response_json["data"]["filename"] = local_file;
+            if (local_last_mtime > 0) {
+                response_json["data"]["local_last_mtime"] = local_last_mtime;
+            }
 
             // 在主线程中回调处理函数
             io_context_.post([handler, response = response_json.dump()]() {
@@ -2092,8 +2264,8 @@ bool Client::get_camera_video(const std::string& args, ResponseHandler handler)
             });
         }
 
-        // 清理状态
-        download_file_in_progress_ = false;
+        // 任务结束，重置特定任务的锁
+        state_flag = false;
     });
 
     download_thread.detach();
@@ -2134,8 +2306,16 @@ Client::DownloadResult Client::download_file_ssh(const std::string& host, const 
         #endif
 
         // 初始化 libssh2 函数，尤其是加密库，非线程安全。客户代码需保证该函数不会被并发调用
-        if (libssh2_init(0) != 0) {
-            throw std::runtime_error("Failed to initialize libssh2");
+        // libssh2_init 不是线程安全的，如果两个线程同时调用会崩溃。
+        // 使用 lock_guard 锁住全局/静态互斥量，或者使用 call_once
+        {
+            std::lock_guard<std::mutex> lock(libssh2_init_mutex_);
+            // 注意：libssh2_init 最好在程序启动时全局调用一次。
+            // 如果必须在这里调用，需要加锁。
+            // 实际上 libssh2_init 内部有全局状态，多次调用通常返回0，但并发调用是未定义的。
+            if (libssh2_init(0) != 0) {
+                throw std::runtime_error("Failed to initialize libssh2");
+            }
         }
 
         // 打开本地文件
@@ -2253,7 +2433,11 @@ Client::DownloadResult Client::download_file_ssh(const std::string& host, const 
         #endif
     }
 
-    libssh2_exit();
+    // 注意：libssh2_exit() 会释放全局资源！
+    // 【严重警告】：如果线程 A 下载完了调用 libssh2_exit()，而线程 B 正在下载，线程 B 会崩溃！
+    // 【修正】：不要在每个任务结束时调用 libssh2_exit()。
+    // 应该在 Client 的析构函数中，或者程序退出的地方调用一次 libssh2_exit()。
+    // 在这里把 libssh2_exit() 删掉！
 
     return {success, success ? "success" : error_message};
 }
@@ -2367,7 +2551,7 @@ bool Client::get_qr_camera_data(ResponseHandler handler)
 
 bool Client::get_qr_camera_data()
 {
-    get_qr_camera_data_task_.start(asio::chrono::milliseconds(50));
+    get_qr_camera_data_task_.start(asio::chrono::milliseconds(200));
     return true;
 }
 
@@ -2429,7 +2613,7 @@ bool Client::get_obst_polygon(ResponseHandler handler)
 
 bool Client::get_obst_polygon()
 {
-    get_obst_polygon_task_.start(asio::chrono::milliseconds(70));
+    get_obst_polygon_task_.start(asio::chrono::milliseconds(200));
     return true;
 }
 
@@ -2459,7 +2643,7 @@ bool Client::get_obst_pcl(ResponseHandler handler)
 
 bool Client::get_obst_pcl()
 {
-    get_obst_pcl_task_.start(asio::chrono::milliseconds(70));
+    get_obst_pcl_task_.start(asio::chrono::milliseconds(200));
     return true;
 }
 
@@ -2489,7 +2673,7 @@ bool Client::get_model_polygon(ResponseHandler handler)
 
 bool Client::get_model_polygon()
 {
-    get_model_polygon_task_.start(asio::chrono::milliseconds(70));
+    get_model_polygon_task_.start(asio::chrono::milliseconds(200));
     return true;
 }
 
@@ -2665,6 +2849,7 @@ bool Client::delete_teachin_files(const std::string& filenames)
     return send_request("DELETE_TEACHIN_FILES", filenames);
 }
 
+// 获取消息代理(RCS)连接状态 api
 bool Client::get_broker_connection(ResponseHandler handler)
 {
     return process_request("GET_BROKER_CONNECTION", handler, [this]() {return get_broker_connection();});
@@ -2686,6 +2871,7 @@ bool Client::set_rcs_online(const std::string& args)
     return send_request("SET_RCS_ONLINE", args);
 }
 
+// 软复位 api
 bool Client::soft_reset(ResponseHandler handler)
 {
     return process_request("SOFT_RESET", handler, [this]() { return soft_reset(); });
@@ -2706,5 +2892,281 @@ bool Client::get_rack_number()
 {
     return send_request("GET_RACK_NUMBER", "");
 }
+
+// 检查显示用的地图更新状态 api
+bool Client::check_showmap_update_status(const std::string& args, ResponseHandler handler)
+{
+    return process_request("CHECK_SHOWMAP_UPDATE_STATUS", handler, [this, &args]() {return check_showmap_update_status(args);});
+}
+
+bool Client::check_showmap_update_status(const std::string& args)
+{
+    return send_request("CHECK_SHOWMAP_UPDATE_STATUS", args);
+}
+
+/**
+ * @brief 条件获取显示用的地图文件 api
+ *
+ * 该api会先调用 check_showmap_update_status 检查地图更新状态，
+ * 如果服务器返回响应的 need_update 字段为true，表示有新地图文件，则调用
+ * get_showmap_force 函数下载最新的地图文件，并在下载完成后调用传入的 handler 回调函数。
+ *
+ * @param args 同 get_showmap_force 和 check_showmap_update_status 函数的 args 参数
+ * @param handler 下载完成后的回调函数
+ * @return true 发起异步请求成功。
+ * @return false 请求失败，还未发起异步操作。
+*/
+bool Client::get_showmap_if(const std::string& args, ResponseHandler handler)
+{
+    return check_showmap_update_status(args, [this, args, handler](const std::string& reply) {
+        json obj = json::parse(reply, nullptr, false);
+        if (obj.is_discarded() || !obj.is_object() || obj.value("code", -1) != 0) {
+            handler(reply);
+            return;
+        }
+        if (obj["data"].value("need_update", false)) {
+            // 有新地图文件，调用 get_showmap_force 下载地图文件
+            // 需要把服务端返回的文件的mtime传给 get_showmap_force 函数，这样才有机会把 mtime 返回给调用方
+            json jargs = json::parse(args, nullptr, false);
+            if (jargs.is_discarded() || !jargs.is_object()) {
+                log_warn("get_showmap_if received invalid json args, using default parameters");
+                std::string local_last_mtime = std::to_string(obj["data"]["local_last_mtime"].get<long>());
+                this->get_showmap_force(R"({"local_last_mtime":)" + local_last_mtime + "}", handler);
+            } else {
+                jargs["local_last_mtime"] = obj["data"]["local_last_mtime"];
+                this->get_showmap_force(jargs.dump(), handler);
+            }
+        } else {
+            // 无需更新，根据返回的原始响应重新设置响应内容
+            obj["code"] = -1;
+            obj["message"] = obj["data"]["status_message"];
+            obj["data"] = json::object();
+            handler(obj.dump());
+        }
+    });
+}
+
+// 开始建图
+bool Client::start_mapping(ResponseHandler handler)
+{
+    return process_request("START_MAPPING", handler, [this]() {return start_mapping();});
+}
+bool Client::start_mapping()
+{
+    return send_request("START_MAPPING", "");
+}
+
+// 保存定位用地图
+bool Client::save_location_map(const std::string& args, ResponseHandler handler)
+{
+    return process_request("SAVE_LOCATION_MAP", handler, [this, &args]() {return save_location_map(args);});
+}
+
+bool Client::save_location_map(const std::string& args)
+{
+    return send_request("SAVE_LOCATION_MAP", args);
+}
+
+// 结束建图
+bool Client::end_mapping(ResponseHandler handler)
+{
+    return process_request("END_MAPPING", handler, [this]() {return end_mapping();});
+}
+
+bool Client::end_mapping()
+{
+    return send_request("END_MAPPING", "");
+}
+
+// 货架管理 API 的实现
+// 获取货架列表 api
+bool Client::get_wares(ResponseHandler handler)
+{
+    return process_request("GET_WARES", handler, [this]() {return get_wares();});
+}
+bool Client::get_wares()
+{
+    return send_request("GET_WARES", "");
+}
+
+// 删除货架条目 api
+bool Client::delete_ware(const std::string& args, ResponseHandler handler)
+{
+    return process_request("DELETE_WARE", handler, [this, &args]() {return delete_ware(args);});
+}
+bool Client::delete_ware(const std::string& args)
+{
+    return send_request("DELETE_WARE", args);
+}
+
+// 修改货架条目 api
+bool Client::modify_ware(const std::string& args, ResponseHandler handler)
+{
+    return process_request("MODIFY_WARE", handler, [this, &args]() {return modify_ware(args);});
+}
+bool Client::modify_ware(const std::string& args)
+{
+    return send_request("MODIFY_WARE", args);
+}
+
+// 添加货架条目 api
+bool Client::add_ware(const std::string& args, ResponseHandler handler)
+{
+    return process_request("ADD_WARE", handler, [this, &args]() {return add_ware(args);});
+}
+bool Client::add_ware(const std::string& args)
+{
+    return send_request("ADD_WARE", args);
+}
+
+// map_data 是包含了 .pgm, .yaml, .json 三个文件的压缩包，服务端会解压并把三个文件放在一起
+bool Client::upload_map_data(const std::string& file_path, ResponseHandler handler)
+{
+    std::string formatted_file_path = file_path;
+    // 去掉 formatted_file_path 首尾空白
+    formatted_file_path.erase(0, formatted_file_path.find_first_not_of(" \t\n\r\f\v"));
+    formatted_file_path.erase(formatted_file_path.find_last_not_of(" \t\n\r\f\v") + 1);
+    return upload_file(R"({"filepath":")" + formatted_file_path + R"(", "type": "map"})", handler);
+}
+
+// map_name 是地图文件的前缀，服务端会根据这个前缀找到对应的 .pgm, .yaml, .json 三个文件，并把三个文件打包成一个压缩包提供下载
+bool Client::download_map_data(const std::string& map_name, ResponseHandler handler)
+{
+    // 为了提高客户端使用体验，当输入的 map_name 为:
+    // 2d-1
+    // 2d-1.zip
+    // pc/2d-1/2d-1
+    // pc/2d-1/2d-1.zip
+    // 这几种情况时，统一把 map_name 处理成 pc/2d-1/2d-1.zip 的格式，这样用户输入更灵活一些
+    // 注意，本地编译环境只支持到 c++14
+    std::string formatted_map_name = map_name;
+    // 去掉 formatted_map_name 首尾空白
+    formatted_map_name.erase(0, formatted_map_name.find_first_not_of(" \t\n\r\f\v"));
+    formatted_map_name.erase(formatted_map_name.find_last_not_of(" \t\n\r\f\v") + 1);
+
+    if (!formatted_map_name.empty()) {
+        // 去掉 .zip 后缀
+        if (formatted_map_name.size() > 4 && formatted_map_name.substr(formatted_map_name.size() - 4) == ".zip") {
+            formatted_map_name = formatted_map_name.substr(0, formatted_map_name.size() - 4);
+        }
+        // 如果没有路径，则添加默认路径前缀
+        if (formatted_map_name.find('/') == std::string::npos) {
+            formatted_map_name = "pc/" + formatted_map_name + "/" + formatted_map_name;
+        }
+        // 添加 .zip 后缀
+        formatted_map_name += ".zip";
+    } else {
+        log_error("map_name is empty");
+        return false;
+    }
+
+    auto result = is_ready_to_get_file(formatted_map_name, handler, MAP_FILE);
+    if (!result) {
+        log_error(result.error_message);
+        return false;
+    }
+    return get_file_by_type(formatted_map_name, handler, MAP_FILE);
+}
+
+// 获取多个地图目录下的所有地图文件 api
+bool Client::get_multi_map_files(ResponseHandler handler)
+{
+    return process_request("GET_MULTI_MAP_FILES", handler, [this]() {
+        return send_request("GET_MULTI_MAP_FILES", "");
+    });
+}
+
+// 开始二维码建图 api
+bool Client::start_qr_mapping(ResponseHandler handler)
+{
+    return process_request("QR_MAPPING", handler, [this]() {
+        return send_request("QR_MAPPING", R"({"mapping": true})");
+    });
+}
+
+// 结束二维码建图 api
+bool Client::stop_qr_mapping(ResponseHandler handler)
+{
+    return process_request("QR_MAPPING", handler, [this]() {
+        return send_request("QR_MAPPING", R"({"mapping": false})");
+    });
+}
+
+/*
+【背景】
+
+// 获取多个地图目录下的所有地图文件 api
+bool Client::get_multi_map_files(ResponseHandler handler)
+{
+    return process_request("GET_MULTI_MAP_FILES", handler, [this]() {
+        return send_request("GET_MULTI_MAP_FILES", "");
+    });
+}
+
+API get_multi_map_files() 返回的数据格式如下：
+```json
+{
+    "code": 0,
+    "data": {
+        "pc": [
+            "4#.smap",
+            "4#.featrue",
+            "chef.pcd",
+            "4#.pcd",
+            "4#.yaml",
+            "4#.pgm"
+        ],
+        "rcs": [
+            "27-1.zip",
+            "27-1.pcd",
+            "3#_1.yaml",
+            "3#_1.pcd",
+            "map_info.json",
+            "chef.pcd",
+            "3#_1.pgm",
+            "3#_1.featrue",
+            "3#_1.station",
+            "3#_1.png",
+            "ism.pcd",
+            "3#_1.smap",
+            "3#_1.zip"
+        ]
+    },
+    "message": "success"
+}
+```
+
+data.pc：数组，其中的元素是地图文件名称；
+data.rcs：数组，其中的元素是地图文件名称；
+
+服务器上完整的地图文件名称格式为：
+map_base_dir/来源/地图文件名称/地图文件名称.后缀
+
+- map_base_dir = /home/byd/data/map
+- 来源 = pc or rcs, 表示地图来自哪里
+- 地图文件名称, 例如: 27-1, 3#_1, 4#
+- 后缀： .pgm, .png
+
+例如：
+```
+/home/byd/data/map/pc/4#/4#.pgm
+/home/byd/data/map/rcs/3#_1/3#_1.pgm
+/home/byd/data/map/rcs/3#_1/3#_1.png
+```
+
+【任务】
+
+1. 新增一个 API xxx, xxx 调用 get_multi_map_files(), 处理其返回数据，处理的逻辑如下：
+- 创建一个新的 json 对象， jnewobj
+- 解析返回数据，将其转化为 json 对象 jresponse, 处理 jresponse
+- 如果存在 data.pc, 遍历 data.pc 中的文件，判断文件是否是 .pgm or .png 后缀，如果是，去掉后缀，取出`地图文件名称，`然后把`地图文件名称`放到 jnewobj.pc 数组中，注意，`地图文件名称`不能重复, 例如: 
+    对于 jresponse.data.pc 中的文件 3#_1.pgm, 3#_1.png, 取出的`地图文件名称`都是 `3#_1`, 但是，只有一个  3#_1 存入 jnewobj.data.pc 中
+- 以同样的逻辑处理 jresponse.data.rcs
+
+2. 给 xxx 取一个合适的名称。
+
+3. API 的实现语言为 c++
+*/
+
 
 }//end of namespace

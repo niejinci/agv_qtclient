@@ -36,6 +36,7 @@ enum FILE_TYPE {
     MODEL_FILE = 2,
     VIDEO_FILE = 3,
     TEACHIN_FILE = 4,
+    SHOWMAP_FILE = 5,
 };
 
 enum class ERROR_CODE {
@@ -67,12 +68,14 @@ public:
     bool pull_map(const std::string& map_name, ResponseHandler handler);
     bool push_map(const std::string& file_path, ResponseHandler handler);
     bool get_agv_position(ResponseHandler handler);
+    void set_agv_position_interval(int interval_ms);
     bool set_operating_mode(int mode, ResponseHandler handler);
     bool get_operating_mode(ResponseHandler handler);
     bool get_point_cloud(ResponseHandler handler);
     bool get_map_list(ResponseHandler handler);
     bool get_camera_video_list(ResponseHandler handler);
     bool get_camera_video(const std::string& args, ResponseHandler handler);
+    bool get_showmap_force(const std::string& args, ResponseHandler handler);
 
     bool get_log_list(ResponseHandler handler);
     bool get_log_file(const std::string& file_name, ResponseHandler handler);
@@ -172,7 +175,21 @@ public:
     bool set_rcs_online(const std::string& args, ResponseHandler handler);
     bool soft_reset(ResponseHandler handler);
     bool get_rack_number(ResponseHandler handler);
+    bool check_showmap_update_status(const std::string& args, ResponseHandler handler);
+    bool get_showmap_if(const std::string& args, ResponseHandler handler);
+    bool start_mapping(ResponseHandler handler);
+    bool save_location_map(const std::string& args, ResponseHandler handler);
+    bool end_mapping(ResponseHandler handler);
+    bool get_wares(ResponseHandler handler);
+    bool delete_ware(const std::string& args, ResponseHandler handler);
+    bool modify_ware(const std::string& args, ResponseHandler handler);
+    bool add_ware(const std::string& args, ResponseHandler handler);
 
+    bool upload_map_data(const std::string& file_path, ResponseHandler handler);
+    bool download_map_data(const std::string& map_name, ResponseHandler handler);
+    bool get_multi_map_files(ResponseHandler handler);
+    bool start_qr_mapping(ResponseHandler handler);
+    bool stop_qr_mapping(ResponseHandler handler);
 public:
     // 单次调用接口
     bool get_scan2pointcloud_once(ResponseHandler handler);
@@ -192,7 +209,12 @@ private:
     void close_socket(std::function<void(const std::string& error)> callback = default_disconnect_callback);
     void clear_write_status();
     void reconnect_pointcloud_after_delay();
-    bool download_file_in_progress_ = false;
+
+    // 使用 atomic 分别控制不同任务的状态，互不干扰
+    std::atomic<bool> is_downloading_video_{false};
+    std::atomic<bool> is_downloading_map_{false};
+    // 用于 libssh2 初始化保护的静态互斥量
+    static std::mutex libssh2_init_mutex_;
     struct DownloadResult {
         bool success;
         std::string error_message;
@@ -215,6 +237,10 @@ private:
         }
     };
 
+    // 抽离出的通用下载入口
+    // 注意：增加了 state_flag 参数，引用传递
+    bool start_download_task(const std::string& args, ResponseHandler handler,
+                             FILE_TYPE file_type, std::atomic<bool>& state_flag);
     // libssh2下载函数
     DownloadResult download_file_ssh(const std::string& host, const std::string& port,
         const std::string& username, const std::string& password,
@@ -356,6 +382,14 @@ private:
     bool set_rcs_online(const std::string& args);
     bool soft_reset();
     bool get_rack_number();
+    bool check_showmap_update_status(const std::string& args);
+    bool start_mapping();
+    bool save_location_map(const std::string& args);
+    bool end_mapping();
+    bool get_wares();
+    bool delete_ware(const std::string& args);
+    bool modify_ware(const std::string& args);
+    bool add_ware(const std::string& args);
 
     // 新增：双臂机器人控制 API 的私有实现
     bool enable_robot(const std::string& args);
@@ -394,6 +428,10 @@ private:
     bool get_qr_camera_data();
     bool get_point_cloud();
     bool get_agv_position();
+
+    // 辅助函数
+    bool is_valid_port(const std::string& portStr);
+    bool is_valid_ipv4(const std::string& ip);
 
 public:
     // 操作模式常量
